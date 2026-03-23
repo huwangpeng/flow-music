@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    image: flow-music:latest
+    container_name: flow-music
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=file:./data/dev.db
+    volumes:
+      - ./storage:/app/storage
+      - ./data:/app/data
+    restart: always

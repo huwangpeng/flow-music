@@ -1,0 +1,34 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:../data/flow-music.db"
+}
+
+model AudioTrack {
+  id           String   @id @default(cuid())
+  uuid         String   @unique
+  title        String
+  artist       String
+  album        String?
+  albumArtist  String?
+  trackNumber  Int?
+  discNumber   Int?
+  year         Int?
+  genre        String?
+  duration     Int      @default(0)
+  bitrate      Int?
+  sampleRate   Int?
+  channels     Int?
+  format       String
+  filePath     String
+  fileSize     Int
+  coverArtId   String?
+  lyrics       String?
+  userId       String   @default("default")
+  tags         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
