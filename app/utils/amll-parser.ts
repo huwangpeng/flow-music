@@ -35,7 +35,7 @@ function parseLrc(lrc: string, tlyric?: string | null): LyricLine[] {
     const ms = parseInt(match[3]!.padEnd(3, '0').slice(0, 3))
     const text = (match[4] ?? '').trim()
     
-    if (text && !text.match(/^(作词|作曲|编曲|制作人|混音|录音)/)) {
+    if (text && !text.match(/^(作词 | 作曲 | 编曲 | 制作人 | 混音 | 录音)/)) {
       lines.push({ time: min * 60 * 1000 + sec * 1000 + ms, text })
     }
   }
@@ -83,163 +83,274 @@ function parseLrc(lrc: string, tlyric?: string | null): LyricLine[] {
   })
 }
 
+/**
+ * HTML 实体解码函数
+ */
+function decodeHtmlEntities(text: string): string {
+  if (typeof window !== 'undefined') {
+    const textarea = document.createElement('textarea')
+    textarea.innerHTML = text
+    return textarea.value
+  }
+  return text
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+}
+
+/**
+ * 时间字符串转毫秒
+ * 支持格式：
+ * - SS.mmm (纯秒数，如 "8.825") - Moon Halo 等
+ * - MM:SS.mmm (分：秒，如 "00:15.226") - 春日影等
+ * - HH:MM:SS.mmm (时：分：秒，如 "01:00:15.226")
+ * - HH:MM:SS:frames (时：分：秒：帧)
+ * - Xh, Xm, Xs, Xms, Xf, Xt (偏移时间)
+ */
+function timeToMs(timeStr: string): number {
+  const timeStrTrimmed = timeStr.trim()
+  
+  // 1. 首先检查是否是纯秒数（Apple Music 常用格式，如 "8.825"）
+  const secondsOnlyMatch = timeStrTrimmed.match(/^(\d+)\.(\d+)$/)
+  if (secondsOnlyMatch) {
+    const seconds = parseInt(secondsOnlyMatch[1]!)
+    const milliseconds = parseInt(secondsOnlyMatch[2]!.padEnd(3, '0').slice(0, 3))
+    return seconds * 1000 + milliseconds
+  }
+  
+  // 2. 偏移时间：Xh, Xm, Xs, Xms, Xf, Xt
+  const offsetMatch = timeStrTrimmed.match(/^(\d+(?:\.\d+)?)(h|m|s|ms|f|t)$/)
+  if (offsetMatch) {
+    const value = parseFloat(offsetMatch[1]!)
+    const unit = offsetMatch[2]!
+    
+    switch (unit) {
+      case 'h': return value * 3600 * 1000
+      case 'm': return value * 60 * 1000
+      case 's': return value * 1000
+      case 'ms': return value
+      case 'f': return Math.round(value * (1000 / 23.976)) // 假设 23.976 fps
+      case 't': return Math.round(value * (1000 / 23.976)) // 假设 tick rate = frame rate
+      default: return 0
+    }
+  }
+  
+  // 3. 时钟时间：分割冒号
+  const timeParts = timeStrTrimmed.split(':')
+  
+  if (timeParts.length === 2) {
+    // MM:SS.mmm 格式（如 "00:15.226"）
+    const minutes = parseInt(timeParts[0]!)
+    const secondsPart = timeParts[1]!
+    const secondParts = secondsPart.split('.')
+    const seconds = parseInt(secondParts[0]!)
+    const milliseconds = secondParts[1] ? parseInt(secondParts[1].padEnd(3, '0').slice(0, 3)) : 0
+    
+    return minutes * 60 * 1000 + seconds * 1000 + milliseconds
+  }
+  
+  if (timeParts.length === 3) {
+    // HH:MM:SS.mmm 格式（如 "01:00:15.226"）
+    const hours = parseInt(timeParts[0]!)
+    const minutes = parseInt(timeParts[1]!)
+    const secondsPart = timeParts[2]!
+    
+    // 检查是否有帧部分 (HH:MM:SS:frames)
+    if (secondsPart.includes(':')) {
+      const [seconds, frames] = secondsPart.split(':')
+      return (hours * 3600 + minutes * 60 + parseInt(seconds!)) * 1000 + 
+             Math.round(parseInt(frames!) * (1000 / 23.976))
+    }
+    
+    // 检查是否有小数部分 (HH:MM:SS.mmm)
+    const secondParts = secondsPart.split('.')
+    const seconds = parseInt(secondParts[0]!)
+    const milliseconds = secondParts[1] ? parseInt(secondParts[1].padEnd(3, '0').slice(0, 3)) : 0
+    
+    return hours * 3600 * 1000 + minutes * 60 * 1000 + seconds * 1000 + milliseconds
+  }
+  
+  // 4. 只有秒数（整数）
+  const seconds = parseFloat(timeStrTrimmed)
+  return seconds * 1000
+}
+
+/**
+ * 从 XML 字符串解析 TTML
+ * 使用 DOMParser 而不是正则表达式
+ */
 function parseTtml(ttml: string): LyricLine[] {
   const lines: LyricLine[] = []
-
-  const timeToMs = (t: string): number => {
-    const parts = t.split(':')
-    if (parts.length === 2) {
-      return Math.round((parseInt(parts[0]!) * 60 + parseFloat(parts[1]!)) * 1000)
-    } else if (parts.length === 3) {
-      return Math.round((parseInt(parts[0]!) * 3600 + parseInt(parts[1]!) * 60 + parseFloat(parts[2]!)) * 1000)
-    }
-    return 0
-  }
-
-  // Match <p> elements with translate attribute and ttm:agent
-  const pRegex = /<p\b[^>]*\bbegin="([^"]+)"[^>]*\btranslate="([^"]*)"[^>]*>([\s\S]*?)<\/p>|<p\b[^>]*\bbegin="([^"]+)"[^>]*>([\s\S]*?)<\/p>/g
-  let pMatch: RegExpExecArray | null
   
-  while ((pMatch = pRegex.exec(ttml)) !== null) {
-    // 匹配结果有两种情况：
-    // 1. 有 translate 属性：pMatch[1]=begin, pMatch[2]=translate, pMatch[3]=innerHTML
-    // 2. 无 translate 属性：pMatch[4]=begin, pMatch[5]=innerHTML
-    const lineStartMs = timeToMs(pMatch[1] || pMatch[4]!)
-    const translateAttr = pMatch[2] || '' // translate 属性值
-    const innerHTML = pMatch[3] || pMatch[5] || ''
-    const fullPTag = pMatch[0]!
+  // 使用 DOMParser 解析 XML
+  const parser = new DOMParser()
+  const xmlDoc = parser.parseFromString(ttml, 'application/xml')
+  
+  // 检查解析错误
+  const parseError = xmlDoc.querySelector('parsererror')
+  if (parseError) {
+    console.warn('TTML 解析错误:', parseError.textContent)
+    return []
+  }
+  
+  // 获取所有 <p> 元素
+  const pElements = xmlDoc.getElementsByTagName('p')
+  
+  for (let i = 0; i < pElements.length; i++) {
+    const pElement = pElements[i]!
     
-    // 提取 ttm:agent 属性（演唱者 ID）
-    const agentMatch = fullPTag.match(/\bttm:agent="([^"]+)"/)
-    const singerId = agentMatch ? agentMatch[1] : undefined
-
-    // 提取翻译歌词：优先使用 translate 属性，其次提取 <translate> 标签或 x-translation 内容
-    let translatedLyric = translateAttr.trim()
+    // 获取 begin 和 end 属性
+    const beginAttr = pElement.getAttribute('begin')
+    const endAttr = pElement.getAttribute('end')
     
-    // 如果没有 translate 属性，尝试从 <translate> 子元素或 ttm:role="x-translation" 提取
-    if (!translatedLyric) {
-      // 匹配 <translate> 标签
-      const translateTagRegex = /<translate[^>]*>([^<]*)<\/translate>/g
-      let translateMatch: RegExpExecArray | null
-      const translateTexts: string[] = []
-      while ((translateMatch = translateTagRegex.exec(innerHTML)) !== null) {
-        const text = translateMatch[1]?.trim()
-        if (text) {
-          translateTexts.push(text)
-        }
-      }
-      
-      // 匹配 <span ttm:role="x-translation">翻译内容</span>
-      const xTransRegex = /<span[^>]*ttm:role="x-translation"[^>]*>([^<]*)<\/span>/g
-      let xTransMatch: RegExpExecArray | null
-      while ((xTransMatch = xTransRegex.exec(innerHTML)) !== null) {
-        const text = xTransMatch[1]?.trim()
-        if (text) {
-          translateTexts.push(text)
-        }
-      }
-      
-      if (translateTexts.length > 0) {
-        translatedLyric = translateTexts.join(' ')
-      }
+    if (!beginAttr) {
+      continue // 跳过没有 begin 属性的 <p>
     }
-
-    // 提取所有 span 标签和它们之间的文本（包括空格）
+    
+    const lineStartMs = timeToMs(beginAttr)
+    const lineEndMs = endAttr ? timeToMs(endAttr) : lineStartMs + 5000
+    
+    // 获取 ttm:agent 属性（演唱者 ID）
+    const singerId = pElement.getAttribute('ttm:agent') || undefined
+    
+    // 提取歌词内容
     const words: LyricWord[] = []
-    let lastEndTime = lineStartMs
+    let translatedLyric = ''
     
-    // 使用 DOM 解析器提取 span 和它们之间的文本
-    const parser = new DOMParser()
-    const doc = parser.parseFromString(`<div>${innerHTML}</div>`, 'text/html')
-    const container = doc.querySelector('div')
+    // 递归处理子节点
+    processChildNodes(pElement.childNodes, words, (translation) => {
+      translatedLyric = translation
+    }, lineStartMs, lineEndMs)
     
-    if (container) {
-      // 遍历所有子节点（包括文本节点和元素节点）
-      for (const node of Array.from(container.childNodes)) {
-        if (node.nodeType === Node.TEXT_NODE) {
-          // 文本节点 - 包含空格
-          const text = node.textContent || ''
-          if (text.trim() === '' && text.length > 0) {
-            // 纯空格，为每个字符创建词
-            for (let i = 0; i < text.length; i++) {
-              const ch = text[i]!
-              words.push({
-                startTime: lastEndTime,
-                endTime: lastEndTime,
-                word: ch,
-                romanWord: '',
-                obscene: false
-              })
-            }
-          }
-        } else if (node.nodeType === Node.ELEMENT_NODE) {
-          const span = node as HTMLElement
-          if (span.tagName === 'SPAN') {
-            // 检查是否有 begin 属性
-            const beginAttr = span.getAttribute('begin')
-            const endAttr = span.getAttribute('end')
-            
-            if (beginAttr) {
-              const wStartMs = timeToMs(beginAttr)
-              const wEndMs = endAttr ? timeToMs(endAttr) : wStartMs + 500
-              const wText = span.textContent || ''
-              
-              // 跳过翻译和罗马音
-              const roleAttr = span.getAttribute('ttm:role')
-              if (!roleAttr) {
-                words.push({
-                  startTime: wStartMs,
-                  endTime: wEndMs,
-                  word: wText,
-                  romanWord: '',
-                  obscene: false
-                })
-                lastEndTime = wEndMs
-              }
-            }
-          }
-        }
+    // 如果没有逐字歌词，使用整行文本
+    if (words.length === 0) {
+      const text = pElement.textContent?.trim() || ''
+      if (text) {
+        words.push({
+          startTime: lineStartMs,
+          endTime: lineEndMs,
+          word: text,
+          romanWord: '',
+          obscene: false
+        })
       }
     }
-
+    
+    // 排序单词
+    words.sort((a, b) => a.startTime - b.startTime)
+    
     if (words.length > 0) {
-      // Sort words just in case
-      words.sort((a, b) => a.startTime - b.startTime)
-      const lineEndMs = words[words.length - 1]!.endTime
       lines.push({
         words,
         translatedLyric,
         romanLyric: '',
         startTime: words[0]!.startTime,
-        endTime: lineEndMs,
+        endTime: words[words.length - 1]!.endTime,
         isBG: false,
         isDuet: false,
         singerId
       })
-    } else {
-      // Fallback if no spans found but p has text
-      const cleanText = innerHTML.replace(/<[^>]+>/g, '').replace(/<translate[^>]*>[^<]*<\/translate>/g, '').trim()
-      if (cleanText) {
-        lines.push({
-          words: [{
-            startTime: lineStartMs,
-            endTime: lineStartMs + 3000,
-            word: cleanText,
+    }
+  }
+  
+  // 按开始时间排序
+  lines.sort((a, b) => a.startTime - b.startTime)
+  
+  return lines
+}
+
+/**
+ * 递归处理 XML 节点
+ */
+function processChildNodes(
+  nodeList: NodeListOf<Node>,
+  words: LyricWord[],
+  setTranslation: (text: string) => void,
+  defaultStartTime: number,
+  defaultEndTime: number
+) {
+  let lastEndTime = defaultStartTime
+  
+  for (let i = 0; i < nodeList.length; i++) {
+    const node = nodeList[i]!
+    
+    // 文本节点
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent || ''
+      if (text && text.trim() === '') {
+        // 纯空格，为每个字符创建词
+        for (let j = 0; j < text.length; j++) {
+          const ch = decodeHtmlEntities(text[j]!)
+          words.push({
+            startTime: lastEndTime,
+            endTime: lastEndTime,
+            word: ch,
             romanWord: '',
             obscene: false
-          }],
-          translatedLyric,
-          romanLyric: '',
-          startTime: lineStartMs,
-          endTime: lineStartMs + 3000,
-          isBG: false,
-          isDuet: false,
-          singerId
-        })
+          })
+        }
+      }
+      continue
+    }
+    
+    // 元素节点
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const element = node as Element
+      const tagName = element.tagName
+      
+      // 处理 <span> 标签
+      if (tagName === 'span') {
+        const beginAttr = element.getAttribute('begin')
+        const endAttr = element.getAttribute('end')
+        const roleAttr = element.getAttribute('ttm:role')
+        
+        // 翻译歌词
+        if (roleAttr === 'x-translation') {
+          const translationText = element.textContent || ''
+          setTranslation(decodeHtmlEntities(translationText.trim()))
+          continue
+        }
+        
+        // 罗马音歌词（不占用逐字位置）
+        if (roleAttr === 'x-roman') {
+          continue
+        }
+        
+        // 背景音等其他 role，跳过
+        if (roleAttr) {
+          continue
+        }
+        
+        // 逐字歌词（有 begin 属性）
+        if (beginAttr) {
+          const wStartMs = timeToMs(beginAttr)
+          const wEndMs = endAttr ? timeToMs(endAttr) : wStartMs + 500
+          const wText = decodeHtmlEntities(element.textContent || '')
+          
+          words.push({
+            startTime: wStartMs,
+            endTime: wEndMs,
+            word: wText,
+            romanWord: '',
+            obscene: false
+          })
+          lastEndTime = wEndMs
+        }
+      }
+      
+      // 处理 <br> 标签（换行）
+      else if (tagName === 'br') {
+        // 忽略换行
+      }
+      
+      // 递归处理子节点
+      else {
+        processChildNodes(element.childNodes, words, setTranslation, defaultStartTime, defaultEndTime)
       }
     }
   }
-
-  lines.sort((a, b) => a.startTime - b.startTime)
-  return lines
 }

@@ -64,14 +64,21 @@
         :ref="el => { if (el) lineRefs[index] = el as HTMLElement }"
         class="lyric-line cursor-pointer group"
         :class="{
-          'is-active': activeIndex === index,
-          'is-passed': activeIndex > index,
-          'is-future': activeIndex < index,
+          'is-active': activeIndices.includes(index),
+          'is-passed': activeIndices.length > 0 && index < activeIndices[0]!,
+          'is-future': activeIndices.length > 0 && index > activeIndices[activeIndices.length - 1]!,
           'has-translation': !!group.translation,
           'singer-v1': group.original.singerId === 'v1',
-          'singer-v2': group.original.singerId === 'v2'
+          'singer-v2': group.original.singerId === 'v2',
+          'is-empty': group.original.words.length === 1 && group.original.words[0]!.word.trim() === ''
         }"
         @click="handleSeek(group.original.startTime)"
+        :style="{
+          transform: group.original.words.length === 1 && group.original.words[0]!.word.trim() === '' 
+            ? `translateY(${getEmptyLineLift(group, index)}%)` 
+            : undefined,
+          transition: 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)'
+        }"
       >
         <!-- 根据演唱者 ID 决定歌词位置：v1 靠左，v2 靠右，无 ID 也靠左 -->
         <div 
@@ -90,17 +97,17 @@
             }"
           >
             <!-- 原句歌词 -->
-            <template v-if="isWordLevel(group.original)">
+            <template v-if="isWordLevel(group.original) && group.original.words.some(w => w.word.trim() !== '')">
               <span 
                 v-for="(word, wIndex) in group.original.words" 
                 :key="wIndex"
                 class="word-wrapper"
                 :style="{ 
-                  transform: `translateY(${getWordLift(word, group.original)}%)`,
+                  transform: `translateY(${getWordLift(word, group.original, index)}%)`,
                   transition: 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)'
                 }"
               >
-                <span class="word-base" :class="activeIndex === index ? 'text-white/90' : 'text-white/30'">{{ word.word }}</span>
+                <span class="word-base" :class="activeIndices.includes(index) ? 'text-white/90' : 'text-white/30'">{{ word.word }}</span>
                 <span 
                   class="word-highlight absolute top-0 left-0 overflow-hidden whitespace-nowrap"
                   :style="{ 
@@ -114,7 +121,7 @@
             <template v-else>
               <span 
                 class="line-content relative inline-block transition-opacity duration-300"
-                :class="activeIndex === index ? 'text-white/90' : 'text-white/30'"
+                :class="activeIndices.includes(index) ? 'text-white/90' : 'text-white/30'"
               >
                 {{ getFullText(group.original.words) }}
               </span>
@@ -125,7 +132,7 @@
           <template v-if="group.translation">
             <div 
               class="translated-text-wrapper mt-1"
-              :class="{ 'translate-enter': activeIndex === index }"
+              :class="{ 'translate-enter': activeIndices.includes(index) }"
             >
               <div 
                 class="translated-text"
@@ -368,73 +375,118 @@ const amllLyrics = computed(() => {
 const groupedLyrics = computed(() => {
   const lyrics = amllLyrics.value
   const groups: LyricGroup[] = []
-  let i = 0
   
-  while (i < lyrics.length) {
-    const current = lyrics[i]!
-    const next = lyrics[i + 1]!
+  // 直接遍历所有歌词行，保持原有的 singerId 和翻译
+  for (let i = 0; i < lyrics.length; i++) {
+    const line = lyrics[i]!
     
-    // 检测是否有下一行且时间戳相同（TTML 格式的双语歌词）
-    if (next && Math.abs(next.startTime - current.startTime) < 50) {
-      // 相同时间戳，配对为原句 + 翻译
+    // 检查是否有翻译歌词
+    if (line.translatedLyric && line.translatedLyric.trim()) {
+      // 有翻译歌词，创建原句 + 翻译的组合
       groups.push({
-        original: current,
-        translation: next
+        original: line,
+        translation: {
+          words: [{
+            startTime: line.startTime,
+            endTime: line.endTime,
+            word: line.translatedLyric.trim(),
+            romanWord: '',
+            obscene: false
+          }],
+          translatedLyric: line.translatedLyric.trim(),
+          romanLyric: '',
+          startTime: line.startTime,
+          endTime: line.endTime,
+          isBG: false,
+          isDuet: false
+        }
       })
-      i += 2
     } else {
-      // 检查当前行是否有 translatedLyric 字段（LRC 格式的翻译歌词）
-      const translatedText = current.translatedLyric?.trim()
-      if (translatedText) {
-        // 有翻译歌词，创建一个虚拟的 translation 行
-        groups.push({
-          original: current,
-          translation: {
+      // 无翻译歌词，单独一行
+      groups.push({
+        original: line
+      })
+    }
+  }
+  
+  // ========== 空行占位机制：在所有歌词之间预先插入空行 ==========
+  const t = internalTime.value
+  const resultGroups: LyricGroup[] = []
+  const GAP_THRESHOLD = 3000 // 3 秒阈值，小于此值延长上一句
+  
+  for (let idx = 0; idx < groups.length; idx++) {
+    const currentGroup = groups[idx]!
+    resultGroups.push(currentGroup)
+    
+    // 在每句歌词之后都插入空行（除了最后一句）
+    if (idx < groups.length - 1) {
+      const nextGroup = groups[idx + 1]!
+      const currentEnd = currentGroup.original.endTime || currentGroup.original.startTime
+      const nextStart = nextGroup.original.startTime
+      const gap = nextStart - currentEnd
+      
+      // 时间重叠时不插入空行（gap <= 0）
+      if (gap <= 0) {
+        // 时间重叠，不插入空行（多歌手合唱等情况）
+        continue
+      }
+      
+      // 如果间隔小于 3 秒，延长当前歌词的 endTime（不插入空行）
+      if (gap < GAP_THRESHOLD) {
+        // 找到刚添加的当前组，修改它的 endTime
+        const lastAddedIdx = resultGroups.length - 1
+        const extendedGroup: LyricGroup = {
+          original: {
+            ...resultGroups[lastAddedIdx]!.original,
+            endTime: nextStart // 延长到下一句开始
+          }
+        }
+        // 如果是逐字歌词，也需要延长最后一个单词的 endTime
+        if (extendedGroup.original.words.length > 0) {
+          extendedGroup.original.words = extendedGroup.original.words.map((w, wordIdx) => 
+            wordIdx === extendedGroup.original!.words.length - 1 
+              ? { ...w, endTime: nextStart }
+              : w
+          )
+        }
+        resultGroups[lastAddedIdx] = extendedGroup
+      } else {
+        // 间隔大于等于 3 秒，插入空行占位
+        resultGroups.push({
+          original: {
             words: [{
-              startTime: current.startTime,
-              endTime: current.endTime,
-              word: translatedText,
+              word: '',
+              startTime: currentEnd,
+              endTime: nextStart,
               romanWord: '',
               obscene: false
             }],
-            translatedLyric: translatedText,
+            startTime: currentEnd,
+            endTime: nextStart,
+            translatedLyric: '',
             romanLyric: '',
-            startTime: current.startTime,
-            endTime: current.endTime,
             isBG: false,
             isDuet: false
           }
         })
-      } else {
-        // 单独一行，无翻译
-        groups.push({
-          original: current
-        })
       }
-      i++
     }
   }
   
-  // 检测是否需要插入空歌词占位（当前时间没有歌词覆盖）
-  const t = internalTime.value
-  const hasActiveLyric = groups.some((group, index) => {
-    const currentEnd = group.original.endTime || group.original.startTime
-    const nextStart = groups[index + 1]?.original.startTime ?? Infinity
-    
-    return t >= group.original.startTime && t < nextStart
-  })
-  
-  // 如果当前没有激活的歌词，且不在间奏中，添加空占位
-  if (!hasActiveLyric && groups.length > 0) {
-    const lastGroup = groups[groups.length - 1]!
+  // 检查是否在所有歌词之后（最后一句已结束，但没有更多歌词）
+  if (resultGroups.length > 0) {
+    const lastGroup = resultGroups[resultGroups.length - 1]!
     const lastEnd = lastGroup.original.endTime || lastGroup.original.startTime
     
-    if (t > lastEnd) {
-      // 在所有歌词之后，添加空占位
-      groups.push({
+    // 如果当前时间在最后一句之后，且最后一句不是空行
+    if (t > lastEnd && lastGroup.original.words.some(w => w.word.trim() !== '')) {
+      // 添加空行占位
+      resultGroups.push({
         original: {
           words: [{
-            word: '', startTime: lastEnd, endTime: lastEnd + 1000,
+            word: '',
+            startTime: lastEnd,
+            endTime: lastEnd + 1000,
             romanWord: '',
             obscene: false
           }],
@@ -449,7 +501,7 @@ const groupedLyrics = computed(() => {
     }
   }
   
-  return groups
+  return resultGroups
 })
 
   // 检测歌词间隔中的暂停符号位置
@@ -609,6 +661,7 @@ watch(amllLyrics, () => {
 })
 
 const activeIndex = ref(-1)
+const activeIndices = ref<number[]>([]) // 支持多行同时 active
 
 function getWordProgress(word: LyricWord) {
   const t = internalTime.value
@@ -618,10 +671,10 @@ function getWordProgress(word: LyricWord) {
   return ((t - word.startTime) / (word.endTime - word.startTime)) * 100
 }
 
-function getWordLift(word: LyricWord, line: LyricLine) {
+function getWordLift(word: LyricWord, line: LyricLine, lineIndex: number) {
   const t = internalTime.value
-  const lineIndex = amllLyrics.value.indexOf(line)
-  const isActiveLine = activeIndex.value === lineIndex
+  // 检查该行是否在 activeIndices 中（支持多行同时 active）
+  const isActiveLine = activeIndices.value.includes(lineIndex)
   
   if (!isActiveLine) {
     return 0
@@ -636,6 +689,37 @@ function getWordLift(word: LyricWord, line: LyricLine) {
   } else {
     return 0
   }
+}
+
+/**
+ * 计算空行的上移效果
+ * 空行行为：
+ * 1. 上一句结束时，空行开始上移
+ * 2. 空行占据 active 位时，保持上移状态
+ * 3. 下一句开始时，空行随着下一句一起上移
+ */
+function getEmptyLineLift(group: LyricGroup, lineIndex: number) {
+  const t = internalTime.value
+  
+  // 检查是否是空行（word 为空）
+  const isEmptyLine = group.original.words.length === 1 && group.original.words[0]!.word.trim() === ''
+  if (!isEmptyLine) {
+    return 0
+  }
+  
+  // 检查空行是否 active
+  const isActive = activeIndices.value.includes(lineIndex)
+  if (isActive) {
+    return -5 // 空行 active 时，上移 5%
+  }
+  
+  // 检查是否是上一句（已经 passed）
+  const isPassed = activeIndices.length > 0 && lineIndex < activeIndices[0]!
+  if (isPassed) {
+    return -5 // 上一句结束的空行，保持上移状态
+  }
+  
+  return 0
 }
 
 function getDotLift(pause: PauseSymbol, dotIndex: number) {
@@ -790,23 +874,40 @@ const loop = () => {
 
 function updateActiveLine() {
   const t = internalTime.value
-  let idx = -1
   const groups = groupedLyrics.value
+  
+  // 找到所有当前应该 active 的行（时间重叠的多行）
+  const newActiveIndices: number[] = []
+  let primaryIdx = -1
   
   for (let i = 0; i < groups.length; i++) {
     const group = groups[i]
-    if (group && group.original.startTime <= t + 150) { 
-      idx = i
-    } else {
-      break
+    if (!group || !group.original) continue
+    
+    // 条件：当前时间在该歌词的时间范围内（允许 150ms 的容差）
+    const isActive = t >= group.original.startTime - 150 && t <= group.original.endTime
+    if (isActive) {
+      newActiveIndices.push(i)
+      // 主 active 行是离当前时间最近的
+      if (primaryIdx < 0 || Math.abs(group.original.startTime - t) < Math.abs(groups[primaryIdx]!.original.startTime - t)) {
+        primaryIdx = i
+      }
     }
   }
-
-  if (idx !== activeIndex.value) {
-    activeIndex.value = idx
+  
+  // 更新 activeIndices - 只有当真正变化时才更新
+  const hasChanged = newActiveIndices.length !== activeIndices.value.length || 
+                     newActiveIndices.some((val, idx) => val !== activeIndices.value[idx])
+  if (hasChanged) {
+    activeIndices.value = newActiveIndices
+  }
+  
+  // 更新主 activeIndex（用于滚动）
+  if (primaryIdx !== activeIndex.value) {
+    activeIndex.value = primaryIdx
     // 只在非手动滚动时更新滚动位置
-    if (!isManualScrolling.value) {
-      calculateScroll(idx)
+    if (!isManualScrolling.value && primaryIdx >= 0) {
+      calculateScroll(primaryIdx)
     }
   }
 }
@@ -948,10 +1049,13 @@ onUnmounted(() => {
   height: 0;
   overflow: visible;
   transition: height 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-  margin-left: auto;
   position: relative;
   z-index: 10;
   text-align: left;
+}
+
+.lyric-line.singer-v2 .translated-text-wrapper {
+  text-align: right;
 }
 
 .translated-text-wrapper.translate-enter {
