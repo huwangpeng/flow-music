@@ -156,7 +156,7 @@ interface PauseSymbol {
 const amllLyrics = computed(() => {
   if (!props.lyricsData || !props.lyricsData.raw) return []
   try {
-    return parseAmllLyrics(props.lyricsData.raw, props.lyricsData.format, props.tlyric)
+    return parseAmllLyrics(props.lyricsData.raw, props.lyricsData.format)
   } catch (e) {
     console.warn('解析歌词失败:', e)
     return []
