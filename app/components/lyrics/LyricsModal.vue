@@ -99,6 +99,7 @@
                 class="h-full"
                 @seek="$emit('seek', $event)"
                 :lyricsData="lyricsData"
+                :tlyric="lyricsData.tlyric || null"
               />
 
               <!-- 无歌词 -->
@@ -144,7 +145,7 @@ interface Props {
   duration: number
   isPlaying: boolean
   isLoadingLyrics: boolean
-  lyricsData: { raw: string; format: 'ttml' | 'lrc' } | null
+  lyricsData: { raw: string; format: 'ttml' | 'lrc'; tlyric?: string | null } | null
 }
 
 const props = withDefaults(defineProps<Props>(), {

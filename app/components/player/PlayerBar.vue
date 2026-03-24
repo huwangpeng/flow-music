@@ -159,7 +159,7 @@ const hoverProgress = ref<number | null>(null)
 
 // 歌词状态
 const isLoadingLyrics = ref(false)
-const currentLyricsData = ref<{ raw: string; format: 'ttml' | 'lrc' } | null>(null)
+const currentLyricsData = ref<{ raw: string; format: 'ttml' | 'lrc'; tlyric?: string | null } | null>(null)
 
 const currentTrack = computed(() => audioStore.currentTrack)
 const isPlaying = computed(() => audioStore.isPlaying)
@@ -187,11 +187,11 @@ async function fetchLyrics(title: string, artist: string) {
 
   try {
     const trackId = currentTrack.value?.uuid || ''
-    const data = await $fetch<{ success: boolean; format: 'ttml'|'lrc'; raw: string }>(
+    const data = await $fetch<{ success: boolean; format: 'ttml'|'lrc'; raw: string; tlyric?: string | null }>(
       `/api/lyrics?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}&trackId=${trackId}`
     )
     if (data.success && data.raw) {
-       currentLyricsData.value = { raw: data.raw, format: data.format }
+       currentLyricsData.value = { raw: data.raw, format: data.format, tlyric: data.tlyric }
     }
   } catch (e) {
     console.warn('歌词获取失败:', e)

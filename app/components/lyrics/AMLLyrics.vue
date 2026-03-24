@@ -98,24 +98,34 @@
           >
             <!-- 原句歌词 -->
             <template v-if="isWordLevel(group.original) && group.original.words.some(w => w.word.trim() !== '')">
-              <span 
+              <template 
                 v-for="(word, wIndex) in group.original.words" 
                 :key="wIndex"
-                class="word-wrapper"
-                :style="{ 
-                  transform: `translateY(${getWordLift(word, group.original, index)}%)`,
-                  transition: 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)'
-                }"
               >
-                <span class="word-base" :class="activeIndices.includes(index) ? 'text-white/90' : 'text-white/30'">{{ word.word }}</span>
+                <!-- 空格 word 直接渲染为空格，不包裹在 word-wrapper 中 -->
                 <span 
-                  class="word-highlight absolute top-0 left-0 overflow-hidden whitespace-nowrap"
-                  :style="{ 
-                    clipPath: `inset(0 ${100 - getWordProgress(word)}% 0 0)`,
-                    color: 'rgba(255, 255, 255, 0.9)'
-                  }"
+                  v-if="word.word.trim() === ''"
+                  style="white-space: pre;"
                 >{{ word.word }}</span>
-              </span>
+                <!-- 非空格 word 使用逐字高亮效果 -->
+                <span 
+                  v-else
+                  class="word-wrapper"
+                  :style="{ 
+                    transform: `translateY(${getWordLift(word, group.original, index)}%)`,
+                    transition: 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)'
+                  }"
+                >
+                  <span class="word-base" :class="activeIndices.includes(index) ? 'text-white/90' : 'text-white/30'">{{ word.word }}</span>
+                  <span 
+                    class="word-highlight absolute top-0 left-0 overflow-hidden whitespace-nowrap"
+                    :style="{ 
+                      clipPath: `inset(0 ${100 - getWordProgress(word)}% 0 0)`,
+                      color: 'rgba(255, 255, 255, 0.9)'
+                    }"
+                  >{{ word.word }}</span>
+                </span>
+              </template>
             </template>
 
             <template v-else>
@@ -131,8 +141,7 @@
           <!-- 翻译歌词（在原句歌词下方） -->
           <template v-if="group.translation">
             <div 
-              class="translated-text-wrapper mt-1"
-              :class="{ 'translate-enter': activeIndices.includes(index) }"
+              class="translated-text-wrapper mt-1 translate-enter"
             >
               <div 
                 class="translated-text"
@@ -441,6 +450,18 @@ const groupedLyrics = computed(() => {
             endTime: nextStart // 延长到下一句开始
           }
         }
+        // 如果有翻译歌词，也需要延长翻译的 endTime
+        if (extendedGroup.translation) {
+          extendedGroup.translation = {
+            ...extendedGroup.translation,
+            endTime: nextStart,
+            words: extendedGroup.translation.words.map((w, wordIdx) => 
+              wordIdx === extendedGroup.translation!.words.length - 1 
+                ? { ...w, endTime: nextStart }
+                : w
+            )
+          }
+        }
         // 如果是逐字歌词，也需要延长最后一个单词的 endTime
         if (extendedGroup.original.words.length > 0) {
           extendedGroup.original.words = extendedGroup.original.words.map((w, wordIdx) => 
@@ -612,8 +633,12 @@ const lineSpacing = computed(() => {
 // 判断是否是逐字模式：如果任一单词的时间范围不是线性的整行，或者有超过 2 个 word，则认为是逐字
 function isWordLevel(line: LyricLine) {
   if (!line || !line.words || line.words.length <= 1) return false
+  // 过滤掉纯空格的 word 后再判断，避免将包含空格的歌词误判为逐字歌词
+  const nonEmptyWords = line.words.filter(w => w.word.trim() !== '')
+  // 如果过滤后只剩下 0 或 1 个非空 word，则不是逐字模式
+  if (nonEmptyWords.length <= 1) return false
   // 避免将简单的单行 LRC 误判，检查是否有不重叠的时间段
-  return line.words.length > 2 || props.lyricsData?.format === 'ttml'
+  return nonEmptyWords.length > 2 || props.lyricsData?.format === 'ttml'
 }
 
   // 判断间奏符号是否应该显示（在整个间奏期间都显示）
@@ -694,8 +719,8 @@ function getWordLift(word: LyricWord, line: LyricLine, lineIndex: number) {
 /**
  * 计算空行的上移效果
  * 空行行为：
- * 1. 上一句结束时，空行开始上移
- * 2. 空行占据 active 位时，保持上移状态
+ * 1. 上一句歌词结束时，空行突然出现占据 active 位
+ * 2. 空行不挤压空间（高度为 0）
  * 3. 下一句开始时，空行随着下一句一起上移
  */
 function getEmptyLineLift(group: LyricGroup, lineIndex: number) {
@@ -714,7 +739,7 @@ function getEmptyLineLift(group: LyricGroup, lineIndex: number) {
   }
   
   // 检查是否是上一句（已经 passed）
-  const isPassed = activeIndices.length > 0 && lineIndex < activeIndices[0]!
+  const isPassed = activeIndices.value.length > 0 && lineIndex < activeIndices.value[0]!
   if (isPassed) {
     return -5 // 上一句结束的空行，保持上移状态
   }
@@ -1027,6 +1052,19 @@ onUnmounted(() => {
   will-change: transform;
 }
 
+/* 空行占位（不挤压空间） */
+.lyric-line.is-empty {
+  height: 0;
+  margin-bottom: 0;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.lyric-line.is-empty.is-active {
+  /* 空行 active 时显示，但高度仍为 0 */
+  opacity: 0;
+}
+
 /* 已经播放过的歌词 */
 .lyric-line.is-passed {
   opacity: 0.15;
@@ -1046,9 +1084,8 @@ onUnmounted(() => {
 }
 
 .translated-text-wrapper {
-  height: 0;
+  height: v-bind('`${translationHeight}pt`');
   overflow: visible;
-  transition: height 0.5s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
   z-index: 10;
   text-align: left;
@@ -1058,15 +1095,11 @@ onUnmounted(() => {
   text-align: right;
 }
 
-.translated-text-wrapper.translate-enter {
-  height: v-bind('`${translationHeight}pt`');
-}
-
 .translated-text {
   font-family: 'HarmonyOS Sans SC', 'HarmonyOS Sans', 'PingFang SC', sans-serif !important;
   font-weight: 900 !important;
-  opacity: 0;
-  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  opacity: 0.6;
+  transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1);
   white-space: normal;
   overflow: visible;
   text-overflow: clip;
@@ -1077,7 +1110,7 @@ onUnmounted(() => {
 }
 
 .translated-text-wrapper.translate-enter .translated-text {
-  opacity: 1;
+  opacity: 0.9;
   color: rgba(255, 255, 255, 0.9);
 }
 

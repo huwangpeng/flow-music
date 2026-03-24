@@ -24,6 +24,23 @@ export function parseAmllLyrics(raw: string, format: 'ttml' | 'lrc', tlyric?: st
   return parseLrc(raw, tlyric)
 }
 
+// ==================== LRC 歌词解析器 ====================
+
+/**
+ * 判断是否是英文字符（包括半角符号）
+ */
+function isEnglishChar(ch: string): boolean {
+  const code = ch.charCodeAt(0)
+  // 英文字母 A-Z a-z (65-90, 97-122)
+  // 半角符号：空格 (32), 标点符号等 (33-47, 58-64, 91-96, 123-126)
+  return (code >= 65 && code <= 90) ||   // A-Z
+         (code >= 97 && code <= 122) ||  // a-z
+         (code >= 32 && code <= 47) ||   // 半角符号 1
+         (code >= 58 && code <= 64) ||   // 半角符号 2
+         (code >= 91 && code <= 96) ||   // 半角符号 3
+         (code >= 123 && code <= 126)    // 半角符号 4
+}
+
 function parseLrc(lrc: string, tlyric?: string | null): LyricLine[] {
   const lines: { time: number; text: string }[] = []
   const regex = /\[(\d+):(\d+)[.:](\d+)\](.*)/g
@@ -40,8 +57,10 @@ function parseLrc(lrc: string, tlyric?: string | null): LyricLine[] {
     }
   }
 
-  let tLines: { time: number; text: string }[] = []
+  // 处理 tlyric（翻译歌词文件）
+  let tLineMap = new Map<number, string>()
   if (tlyric) {
+    const tLines: { time: number; text: string }[] = []
     const tRegex = /\[(\d+):(\d+)[.:](\d+)\](.*)/g
     let tMatch: RegExpExecArray | null
     while ((tMatch = tRegex.exec(tlyric)) !== null) {
@@ -53,18 +72,41 @@ function parseLrc(lrc: string, tlyric?: string | null): LyricLine[] {
         tLines.push({ time: min * 60 * 1000 + sec * 1000 + ms, text })
       }
     }
+    tLineMap = new Map(tLines.map(t => [t.time, t.text]))
   }
 
-  const tLineMap = new Map(tLines.map(t => [t.time, t.text]))
-
+  // ========== 关键修复：先排序，再检测翻译 ==========
+  // 1. 先按时间排序
   lines.sort((a, b) => a.time - b.time)
 
-  return lines.map((line, i) => {
-    const next = lines[i + 1]
+  // 2. 检测时间相同的歌词对（原句 + 翻译）
+  const translationMap = new Map<number, string>()
+  const translationIndices = new Set<number>()
+  
+  for (let i = 0; i < lines.length - 1; i++) {
+    const current = lines[i]!
+    const next = lines[i + 1]!
+    
+    // 如果下一句时间相同，且当前句还没有翻译，则下一句是翻译
+    if (current.time === next.time && !tLineMap.has(current.time)) {
+      translationMap.set(current.time, next.text)
+      // 标记下一句的索引，稍后过滤
+      translationIndices.add(i + 1)
+    }
+  }
+
+  // 3. 过滤掉翻译歌词（已经放到 translationMap 中）
+  const originalLines = lines.filter((_, index) => !translationIndices.has(index))
+
+  return originalLines.map((line, i) => {
+    const next = originalLines[i + 1]
     const startTime = line.time
     const endTime = next ? Math.min(startTime + 5000, next.time - 50) : startTime + 5000
-    const translatedLyric = tLineMap.get(startTime) || ''
+    
+    // 优先使用 tlyric 的翻译，其次使用时间相同的翻译
+    const translatedLyric = tLineMap.get(startTime) || translationMap.get(startTime) || ''
 
+    // LRC 歌词不是逐字的，直接整句作为一个 word
     return {
       words: [{
         startTime,
@@ -82,6 +124,8 @@ function parseLrc(lrc: string, tlyric?: string | null): LyricLine[] {
     }
   })
 }
+
+// ==================== TTML 歌词解析器 ====================
 
 /**
  * HTML 实体解码函数
@@ -274,6 +318,19 @@ function processChildNodes(
   defaultEndTime: number
 ) {
   let lastEndTime = defaultStartTime
+  let hasTimedSpans = false  // 标记是否有逐字歌词（带 begin 的 span）
+  
+  // 第一次遍历：检测是否有逐字歌词
+  for (let i = 0; i < nodeList.length; i++) {
+    const node = nodeList[i]!
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const element = node as Element
+      if (element.tagName === 'span' && element.getAttribute('begin')) {
+        hasTimedSpans = true
+        break
+      }
+    }
+  }
   
   for (let i = 0; i < nodeList.length; i++) {
     const node = nodeList[i]!
@@ -281,14 +338,67 @@ function processChildNodes(
     // 文本节点
     if (node.nodeType === Node.TEXT_NODE) {
       const text = node.textContent || ''
+      
+      // 如果是纯空格文本
       if (text && text.trim() === '') {
-        // 纯空格，为每个字符创建词
-        for (let j = 0; j < text.length; j++) {
-          const ch = decodeHtmlEntities(text[j]!)
+        if (hasTimedSpans) {
+          // 逐字歌词模式：只在 span 标签之间添加单个空格
+          // 检查这个文本节点是否在有 begin 的 span 之间
+          const prevNode = i > 0 ? nodeList[i - 1] : null
+          const nextNode = i < nodeList.length - 1 ? nodeList[i + 1] : null
+          
+          const prevIsTimedSpan = prevNode?.nodeType === Node.ELEMENT_NODE && 
+                                  (prevNode as Element).tagName === 'span' && 
+                                  (prevNode as Element).getAttribute('begin')
+          const nextIsTimedSpan = nextNode?.nodeType === Node.ELEMENT_NODE && 
+                                  (nextNode as Element).tagName === 'span' && 
+                                  (nextNode as Element).getAttribute('begin')
+          
+          // 只有前后都是逐字 span 时，才添加空格 word
+          if (prevIsTimedSpan && nextIsTimedSpan) {
+            // 获取前一个单词和后一个单词的时间信息
+            const prevWord = words.length > 0 ? words[words.length - 1] : null
+            const nextSpanBegin = nextIsTimedSpan ? timeToMs((nextNode as Element).getAttribute('begin')!) : null
+            
+            // 计算空格的时间范围：从前一个单词结束到后一个单词开始
+            const spaceStartTime = prevWord ? prevWord.endTime : lastEndTime
+            const spaceEndTime = nextSpanBegin !== null ? nextSpanBegin : spaceStartTime + 100
+            
+            words.push({
+              startTime: spaceStartTime,
+              endTime: spaceEndTime,
+              word: ' ',
+              romanWord: '',
+              obscene: false
+            })
+          }
+        } else {
+          // 普通 TTML 模式：保留自然空格，不单独创建 word
+          // 空格会包含在父级文本节点的 decodedText 中
+        }
+      } 
+      // 有实际内容的文本
+      else if (text && text.trim() !== '') {
+        const decodedText = decodeHtmlEntities(text)
+        
+        if (hasTimedSpans) {
+          // 逐字歌词模式：清理文本，移除首尾空格，压缩中间多个空格为单个
+          const cleanedText = decodedText.trim().replace(/\s+/g, ' ')
+          if (cleanedText) {
+            words.push({
+              startTime: lastEndTime,
+              endTime: lastEndTime,
+              word: cleanedText,
+              romanWord: '',
+              obscene: false
+            })
+          }
+        } else {
+          // 普通 TTML 模式：保留原始空格
           words.push({
             startTime: lastEndTime,
             endTime: lastEndTime,
-            word: ch,
+            word: decodedText,
             romanWord: '',
             obscene: false
           })
@@ -308,8 +418,8 @@ function processChildNodes(
         const endAttr = element.getAttribute('end')
         const roleAttr = element.getAttribute('ttm:role')
         
-        // 翻译歌词
-        if (roleAttr === 'x-translation') {
+        // 翻译歌词 (支持多种 role 格式)
+        if (roleAttr === 'x-translation' || roleAttr === 'translation' || roleAttr === 'x-trans' || roleAttr === 'trans') {
           const translationText = element.textContent || ''
           setTranslation(decodeHtmlEntities(translationText.trim()))
           continue
