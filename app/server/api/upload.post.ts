@@ -100,86 +100,91 @@ export default defineEventHandler(async (event) => {
           'Referer': 'https://music.163.com/'
         }
 
-        // 使用无需认证的 web 搜索接口
+        // 使用 Meting API 搜索
         const neteaseRes = await fetch(
-          `https://music.163.com/api/search/get/web?s=${keyword}&type=1&limit=1`,
+          `https://api.qijieya.cn/meting/?type=search&id=${keyword}`,
           { headers: fetchHeaders }
         ).then(r => r.json())
         
-        if (neteaseRes?.result?.songs?.length > 0) {
-          const song = neteaseRes.result.songs[0]
-          finalTitle = song.name
-          finalArtist = song.artists?.map((a: any) => a.name).join(', ') || finalArtist
-          finalAlbum = song.album?.name || finalAlbum
+        if (neteaseRes?.length > 0) {
+          const song = neteaseRes[0]
+          finalTitle = song.name || finalTitle
+          finalArtist = song.artist || finalArtist
           
-          // 网易云封面地址由 picId 构造，加了 param 压缩至 500x500，提升数十倍刮取速度
-          const picId = song.album?.picId
-          if (picId) {
-            coverUrl = `https://p1.music.126.net/6y-UleORITEDbvrOLV0Q8A==${picId}.jpg?param=500y500`
+          // 封面 URL 直接使用 meting API 返回的 pic
+          if (song.pic) {
+            coverUrl = song.pic
           }
 
-          // 自动下载歌词
+          // 自动下载歌词（双语，从 meting API 获取）
           try {
-            const lrcRes = await fetch(`https://music.163.com/api/song/lyric?id=${song.id}&lv=1&kv=1&tv=-1`, { headers: fetchHeaders }).then(r => r.json())
-            if (lrcRes?.lrc?.lyric) {
-              await saveLyricsLocally(trackId, lrcRes.lrc.lyric)
+            if (song.lrc) {
+              const lrcRes = await fetch(song.lrc, { headers: fetchHeaders }).then(r => r.text())
+              if (lrcRes) {
+                await saveLyricsLocally(trackId, lrcRes)
+              }
             }
           } catch (e) {
             console.warn('[Upload] Failed to fetch lyrics:', e)
           }
         } else {
-           // 补充 QQ 音乐搜索探测 fallback
-           const qqRes = await fetch(`https://api.lolimi.cn/API/qqyy/?word=${keyword}&page=1`).then(r => r.json())
-           if (qqRes?.code === 1 && qqRes.data?.length > 0) {
-             const qqSong = qqRes.data[0]
-             finalTitle = qqSong.songname || finalTitle
-             finalArtist = qqSong.singer || finalArtist
-             coverUrl = qqSong.pic || coverUrl
-           }
+          console.warn('[Upload] No search results from Meting API for:', keyword)
         }
       }
     } catch(err: any) {
-      console.warn('Netease API fetching failed, attempting fallback...', err.message)
-      try {
-        const cleanTitle = sanitizeTitleForSearch(finalTitle)
-        const query = encodeURIComponent(cleanTitle)
-        const fallbackRes = await fetch(`http://music.163.com/api/search/pc?s=${query}&limit=1&type=1`).then(r => r.json())
-        if (fallbackRes?.result?.songs?.length > 0) {
-          const song = fallbackRes.result.songs[0]
-          finalTitle = song.name
-          finalArtist = song.artists?.map((a: any) => a.name).join('/') || finalArtist
-          finalAlbum = song.album?.name || finalAlbum
-        }
-      } catch (fallbackErr) {
-        console.error('All Tag Completion API failed', fallbackErr)
-      }
+      console.warn('Meting API fetching failed:', err.message)
     }
 
     let coverArtId: string | null = null
-    if (tags.coverArt || coverUrl) {
-      const crypto = await import('crypto')
-      const coverDir = getCoverPath()
-      if (!existsSync(coverDir)) {
-        await mkdir(coverDir, { recursive: true })
-      }
-      
-      let coverData = tags.coverArt
-      if (!coverData && coverUrl) {
-          try {
-             // 封面下载也带上 headers
-             const buf = await fetch(coverUrl, {
-               headers: { 'User-Agent': 'Mozilla/5.0' }
-             }).then(r => r.arrayBuffer())
-             coverData = Buffer.from(buf)
-          } catch(e) {}
-      }
+      if (tags.coverArt || coverUrl) {
+        const crypto = await import('crypto')
+        const coverDir = getCoverPath()
+        if (!existsSync(coverDir)) {
+          await mkdir(coverDir, { recursive: true })
+        }
+        
+        let coverData = tags.coverArt
+        if (!coverData && coverUrl) {
+            try {
+               // 封面下载也带上 headers
+               const response = await fetch(coverUrl, {
+                 headers: { 'User-Agent': 'Mozilla/5.0' }
+               })
+               
+               // 验证响应状态
+               if (!response.ok) {
+                 console.warn(`Cover download failed with status ${response.status} for ${filename}`)
+               } else {
+                 const contentType = response.headers.get('content-type')
+                 // 验证返回的是图片数据
+                 if (!contentType || !contentType.startsWith('image/')) {
+                   console.warn(`Invalid content type for cover: ${contentType}`)
+                 } else {
+                   const buf = await response.arrayBuffer()
+                   coverData = Buffer.from(buf)
+                   
+                   // 验证图片数据不为空且大小合理
+                   if (coverData.length < 100) {
+                     console.warn(`Cover data too small for ${filename}, likely an error response`)
+                     coverData = undefined
+                   }
+                 }
+               }
+            } catch(e) {
+              console.warn(`Failed to download cover for ${filename}:`, e)
+            }
+        }
 
-      if (coverData) {
-          coverArtId = crypto.createHash('md5').update(coverData).digest('hex')
-          const coverPath = join(coverDir, `${coverArtId}.jpg`)
-          await writeFile(coverPath, coverData)
+        if (coverData) {
+            coverArtId = crypto.createHash('md5').update(coverData).digest('hex')
+            
+            // 检查封面是否已经存在，避免重复写入
+            const coverPath = join(coverDir, `${coverArtId}.jpg`)
+            if (!existsSync(coverPath)) {
+              await writeFile(coverPath, coverData)
+            }
+        }
       }
-    }
 
     const track = await prisma.audioTrack.create({
       data: {

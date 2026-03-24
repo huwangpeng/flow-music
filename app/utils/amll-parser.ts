@@ -16,14 +16,14 @@ export interface LyricLine {
   isDuet: boolean
 }
 
-export function parseAmllLyrics(raw: string, format: 'ttml' | 'lrc'): LyricLine[] {
+export function parseAmllLyrics(raw: string, format: 'ttml' | 'lrc', tlyric?: string | null): LyricLine[] {
   if (format === 'ttml') {
     return parseTtml(raw)
   }
-  return parseLrc(raw)
+  return parseLrc(raw, tlyric)
 }
 
-function parseLrc(lrc: string): LyricLine[] {
+function parseLrc(lrc: string, tlyric?: string | null): LyricLine[] {
   const lines: { time: number; text: string }[] = []
   const regex = /\[(\d+):(\d+)[.:](\d+)\](.*)/g
   let match: RegExpExecArray | null
@@ -34,20 +34,35 @@ function parseLrc(lrc: string): LyricLine[] {
     const ms = parseInt(match[3]!.padEnd(3, '0').slice(0, 3))
     const text = (match[4] ?? '').trim()
     
-    // Ignore pure metadata or empty lines
     if (text && !text.match(/^(作词|作曲|编曲|制作人|混音|录音)/)) {
       lines.push({ time: min * 60 * 1000 + sec * 1000 + ms, text })
     }
   }
 
-  // Very important! Sort the lines chronologically
+  let tLines: { time: number; text: string }[] = []
+  if (tlyric) {
+    const tRegex = /\[(\d+):(\d+)[.:](\d+)\](.*)/g
+    let tMatch: RegExpExecArray | null
+    while ((tMatch = tRegex.exec(tlyric)) !== null) {
+      const min = parseInt(tMatch[1]!)
+      const sec = parseInt(tMatch[2]!)
+      const ms = parseInt(tMatch[3]!.padEnd(3, '0').slice(0, 3))
+      const text = (tMatch[4] ?? '').trim()
+      if (text) {
+        tLines.push({ time: min * 60 * 1000 + sec * 1000 + ms, text })
+      }
+    }
+  }
+
+  const tLineMap = new Map(tLines.map(t => [t.time, t.text]))
+
   lines.sort((a, b) => a.time - b.time)
 
   return lines.map((line, i) => {
     const next = lines[i + 1]
     const startTime = line.time
-    // Standard LRC uses sentences as full words. End time overlaps are fixed here.
     const endTime = next ? Math.min(startTime + 5000, next.time - 50) : startTime + 5000
+    const translatedLyric = tLineMap.get(startTime) || ''
 
     return {
       words: [{
@@ -57,7 +72,7 @@ function parseLrc(lrc: string): LyricLine[] {
         romanWord: '',
         obscene: false
       }],
-      translatedLyric: '',
+      translatedLyric,
       romanLyric: '',
       startTime,
       endTime,

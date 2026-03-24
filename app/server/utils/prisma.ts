@@ -5,9 +5,5 @@ const dbPath = getDatabasePath()
 console.log('[Prisma] Using database at:', dbPath)
 
 export const prisma = new PrismaClient({
-  datasources: {
-    db: {
-      url: `file:${dbPath}`
-    }
-  }
+  datasourceUrl: `file:${dbPath}`
 })

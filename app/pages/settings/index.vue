@@ -57,36 +57,6 @@
         </div>
       </div>
     </section>
-
-    <!-- 高级 API 配置 -->
-    <section class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
-      <div class="px-6 py-5 border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
-        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">API 密钥 (可选)</h2>
-      </div>
-      <div class="p-6 space-y-6">
-        <div>
-          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">网易云音乐 API</label>
-          <input 
-            type="password" 
-            :value="store.settings.apiKeys?.neteaseMusic || ''"
-            @change="e => updateApiKey('neteaseMusic', (e.target as HTMLInputElement).value)"
-            placeholder="留空以使用默认公共节点" 
-            class="w-full max-w-md px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:border-black dark:focus:border-white focus:ring-1 focus:ring-black dark:focus:ring-white transition-all outline-none"
-          />
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">OpenAI API (智能重命名)</label>
-          <input 
-            type="password" 
-            :value="store.settings.apiKeys?.openai || ''"
-            @change="e => updateApiKey('openai', (e.target as HTMLInputElement).value)"
-            placeholder="sk-..." 
-            class="w-full max-w-md px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:border-black dark:focus:border-white focus:ring-1 focus:ring-black dark:focus:ring-white transition-all outline-none"
-          />
-        </div>
-      </div>
-    </section>
   </div>
 </template>
 
@@ -99,12 +69,6 @@ definePageMeta({ layout: 'default' })
 
 const store = useSettingsStore()
 const isClearing = ref(false)
-
-function updateApiKey(key: 'neteaseMusic' | 'openai', val: string) {
-  const newApiKeys = { ...store.settings.apiKeys, [key]: val }
-  store.updateSettings({ apiKeys: newApiKeys })
-}
-
 async function clearCache() {
   if (isClearing.value) return
   isClearing.value = true
