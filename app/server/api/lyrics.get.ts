@@ -186,6 +186,18 @@ async function fetchNeteaseLrc(neteaseId: number): Promise<NeteaseLrcResult | nu
   }
 }
 
+// ===== 后台 TTML 升级 =====
+async function upgradeToTtml(trackId: string, title: string, artist: string) {
+  const neteaseId = await searchNeteaseId(title, artist)
+  if (!neteaseId) return
+  
+  const ttml = await fetchAmllTtml(neteaseId)
+  if (ttml) {
+    await saveTtmlAndLrc(trackId, ttml)
+    console.log(`[lyrics] Upgraded to TTML for ${trackId}`)
+  }
+}
+
 // GET /api/lyrics?title=xxx&artist=xxx&trackId=yyy
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
@@ -195,7 +207,7 @@ export default defineEventHandler(async (event) => {
 
   // 1. 优先尝试加载本地缓存的歌词文件
   if (trackId) {
-    // 优先读取 TTML 格式，其次读取 LRC 格式
+    // 优先读取 TTML 格式
     const ttmlPath = join(getLyricsPath(), `${trackId}.ttml`)
     const lrcPath = join(getLyricsPath(), `${trackId}.lrc`)
     
@@ -208,9 +220,16 @@ export default defineEventHandler(async (event) => {
       }
     }
     
+    // 本地只有 LRC 时，先返回 LRC，同时后台尝试获取 TTML 升级
     if (existsSync(lrcPath)) {
       try {
         const lrc = await readFile(lrcPath, 'utf-8')
+        // 后台尝试获取 TTML 升级（不阻塞当前请求）
+        if (title) {
+          upgradeToTtml(trackId, title, artist).catch(e => {
+            console.warn('[lyrics] Background TTML upgrade failed:', e)
+          })
+        }
         return { success: true, source: 'local', format: 'lrc', raw: lrc, trackId }
       } catch (e) {
         console.warn('[lyrics] Failed to read local LRC:', e)

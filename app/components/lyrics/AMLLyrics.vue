@@ -1,11 +1,21 @@
 <template>
-  <div class="relative w-full h-full overflow-hidden select-none" ref="containerRef">
+  <div class="relative w-full h-full overflow-hidden select-none" ref="containerRef" @wheel.prevent="handleWheel">
+    <!-- 手动滚动时显示的时间提示 -->
+    <Transition name="time-fade">
+      <div 
+        v-if="scrollTimeHint"
+        class="absolute right-4 top-1/2 -translate-y-1/2 z-20 bg-white/10 backdrop-blur-md px-4 py-2 rounded-xl text-white/90 text-lg font-bold tabular-nums"
+      >
+        {{ scrollTimeHint }}
+      </div>
+    </Transition>
+
     <div
       v-if="amllLyrics.length > 0"
       class="scroll-layer absolute w-full top-0 left-0 pr-8"
       :style="{ 
         transform: `translateY(${scrollOffset}px)`, 
-        transition: 'transform 0.8s cubic-bezier(0.2, 0, 0, 1)' 
+        transition: isManualScrolling ? 'none' : 'transform 0.8s cubic-bezier(0.2, 0, 0, 1)' 
       }"
     >
       <div class="h-[35vh]"></div>
@@ -21,9 +31,30 @@
           class="pause-text"
           :style="{ fontSize: `${baseFontSize}pt` }"
         >
-          <span class="dot">•</span>
-          <span class="dot">•</span>
-          <span class="dot">•</span>
+          <span 
+            class="dot" 
+            :style="{ 
+              opacity: getDotOpacity(pauseSymbols[0], 0),
+              transform: `translateY(${getDotLift(pauseSymbols[0], 0)}%)`,
+              transition: 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)'
+            }"
+          >•</span>
+          <span 
+            class="dot" 
+            :style="{ 
+              opacity: getDotOpacity(pauseSymbols[0], 1),
+              transform: `translateY(${getDotLift(pauseSymbols[0], 1)}%)`,
+              transition: 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)'
+            }"
+          >•</span>
+          <span 
+            class="dot" 
+            :style="{ 
+              opacity: getDotOpacity(pauseSymbols[0], 2),
+              transform: `translateY(${getDotLift(pauseSymbols[0], 2)}%)`,
+              transition: 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)'
+            }"
+          >•</span>
         </div>
       </div>
       
@@ -36,56 +67,79 @@
           'is-active': activeIndex === index,
           'is-passed': activeIndex > index,
           'is-future': activeIndex < index,
-          'has-translation': !!group.translation
+          'has-translation': !!group.translation,
+          'singer-v1': group.original.singerId === 'v1',
+          'singer-v2': group.original.singerId === 'v2'
         }"
         @click="handleSeek(group.original.startTime)"
       >
+        <!-- 根据演唱者 ID 决定歌词位置：v1 靠左，v2 靠右，无 ID 也靠左 -->
         <div 
-          class="lyric-text block transition-all duration-700 will-change-transform font-black tracking-tight"
-          :style="{ fontSize: `${baseFontSize}pt` }"
+          class="lyric-content-wrapper flex w-full flex-col"
+          :class="{
+            'items-start': group.original.singerId === 'v1' || !group.original.singerId,
+            'items-end': group.original.singerId === 'v2'
+          }"
         >
-          <!-- 原句歌词 -->
-          <template v-if="isWordLevel(group.original)">
-            <span 
-              v-for="(word, wIndex) in group.original.words" 
-              :key="wIndex"
-              class="word-wrapper inline-block relative mr-[0.25em]"
-            >
-              <span class="word-base" :class="activeIndex === index ? 'text-white/90' : 'text-white/30'">{{ word.word }}</span>
+          <div 
+            class="lyric-text block transition-all duration-700 will-change-transform font-black tracking-tight"
+            :style="{ fontSize: `${baseFontSize}pt` }"
+            :class="{
+              'text-left': group.original.singerId === 'v1' || !group.original.singerId,
+              'text-right': group.original.singerId === 'v2'
+            }"
+          >
+            <!-- 原句歌词 -->
+            <template v-if="isWordLevel(group.original)">
               <span 
-                class="word-highlight absolute top-0 left-0 overflow-hidden whitespace-nowrap"
+                v-for="(word, wIndex) in group.original.words" 
+                :key="wIndex"
+                class="word-wrapper"
                 :style="{ 
-                  clipPath: `inset(0 ${100 - getWordProgress(word)}% 0 0)`,
-                  color: 'rgba(255, 255, 255, 0.9)'
+                  transform: `translateY(${getWordLift(word, group.original)}%)`,
+                  transition: 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)'
                 }"
-              >{{ word.word }}</span>
-            </span>
-          </template>
+              >
+                <span class="word-base" :class="activeIndex === index ? 'text-white/90' : 'text-white/30'">{{ word.word }}</span>
+                <span 
+                  class="word-highlight absolute top-0 left-0 overflow-hidden whitespace-nowrap"
+                  :style="{ 
+                    clipPath: `inset(0 ${100 - getWordProgress(word)}% 0 0)`,
+                    color: 'rgba(255, 255, 255, 0.9)'
+                  }"
+                >{{ word.word }}</span>
+              </span>
+            </template>
 
-          <template v-else>
-            <span 
-              class="line-content relative inline-block transition-opacity duration-300"
-              :class="activeIndex === index ? 'text-white/90' : 'text-white/30'"
+            <template v-else>
+              <span 
+                class="line-content relative inline-block transition-opacity duration-300"
+                :class="activeIndex === index ? 'text-white/90' : 'text-white/30'"
+              >
+                {{ getFullText(group.original.words) }}
+              </span>
+            </template>
+          </div>
+          
+          <!-- 翻译歌词（在原句歌词下方） -->
+          <template v-if="group.translation">
+            <div 
+              class="translated-text-wrapper mt-1"
+              :class="{ 'translate-enter': activeIndex === index }"
             >
-              {{ getFullText(group.original.words) }}
-            </span>
+              <div 
+                class="translated-text"
+                :style="{ fontSize: `${translationFontSize}pt` }"
+                :class="{
+                  'text-left': group.original.singerId === 'v1' || !group.original.singerId,
+                  'text-right': group.original.singerId === 'v2'
+                }"
+              >
+                {{ getFullText(group.translation.words) }}
+              </div>
+            </div>
           </template>
         </div>
-        
-        <!-- 翻译歌词（靠右，缩小字体） -->
-        <template v-if="group.translation">
-          <div 
-            class="translated-text-wrapper"
-            :class="{ 'translate-enter': activeIndex === index }"
-          >
-            <div 
-              class="translated-text"
-              :style="{ fontSize: `${translationFontSize}pt` }"
-            >
-              {{ getFullText(group.translation.words) }}
-            </div>
-          </div>
-        </template>
       </div>
       
       <!-- 歌词之间的暂停符号 -->
@@ -100,9 +154,30 @@
             class="pause-text"
             :style="{ fontSize: `${baseFontSize}pt` }"
           >
-            <span class="dot">•</span>
-            <span class="dot">•</span>
-            <span class="dot">•</span>
+            <span 
+              class="dot" 
+              :style="{ 
+                opacity: getDotOpacity(pause, 0),
+                transform: `translateY(${getDotLift(pause, 0)}%)`,
+                transition: 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)'
+              }"
+            >•</span>
+            <span 
+              class="dot" 
+              :style="{ 
+                opacity: getDotOpacity(pause, 1),
+                transform: `translateY(${getDotLift(pause, 1)}%)`,
+                transition: 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)'
+              }"
+            >•</span>
+            <span 
+              class="dot" 
+              :style="{ 
+                opacity: getDotOpacity(pause, 2),
+                transform: `translateY(${getDotLift(pause, 2)}%)`,
+                transition: 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)'
+              }"
+            >•</span>
           </div>
         </div>
       </template>
@@ -114,14 +189,82 @@
       <Music class="w-16 h-16 mb-4 opacity-20" />
       <p class="text-gray-500">暂无歌词</p>
     </div>
+
+    <!-- 底部控制栏 -->
+    <div class="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-6 z-20">
+      <button 
+        @click="togglePlayMode()" 
+        class="w-10 h-10 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white/70 hover:text-white transition-all"
+        :title="playModeLabel"
+      >
+        <component :is="playModeIcon" class="w-5 h-5" />
+        <span 
+          v-if="playMode === 'single'" 
+          class="absolute -top-1 -right-1 text-[8px] font-bold text-white/80 bg-white/20 rounded-full w-4 h-4 flex items-center justify-center"
+        >1</span>
+      </button>
+      
+      <button 
+        @click="showPlaylist = !showPlaylist" 
+        class="w-10 h-10 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white/70 hover:text-white transition-all"
+        :class="{ 'bg-white/20 text-white': showPlaylist }"
+      >
+        <ListMusic class="w-5 h-5" />
+      </button>
+    </div>
+
+    <!-- 播放列表面板 -->
+    <Transition name="slide-up">
+      <div 
+        v-if="showPlaylist"
+        class="absolute bottom-20 left-1/2 -translate-x-1/2 w-80 max-h-[50vh] z-30 bg-black/90 backdrop-blur-xl rounded-2xl overflow-hidden border border-white/10"
+      >
+        <div class="flex items-center justify-between p-4 border-b border-white/10">
+          <h3 class="text-white font-bold">播放列表</h3>
+          <button @click="showPlaylist = false" class="text-white/60 hover:text-white">
+            <X class="w-5 h-5" />
+          </button>
+        </div>
+        <div class="overflow-y-auto max-h-[40vh] p-2">
+          <div 
+            v-for="(item, index) in audioStore.queue" 
+            :key="item.id"
+            @click="audioStore.play(item)"
+            :class="[
+              'flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-all',
+              index === audioStore.queueIndex 
+                ? 'bg-white/20 text-white' 
+                : 'text-white/60 hover:bg-white/10 hover:text-white'
+            ]"
+          >
+            <div class="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0 bg-gray-800">
+              <img 
+                v-if="item.coverUrl || item.coverArtId"
+                :src="item.coverUrl || `/api/cover/${item.coverArtId}`"
+                class="w-full h-full object-cover"
+              />
+              <Music v-else class="w-5 h-5 text-gray-500 m-2.5" />
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate">{{ item.title }}</p>
+              <p class="text-xs opacity-60 truncate">{{ item.artist }}</p>
+            </div>
+          </div>
+          <div v-if="audioStore.queue.length === 0" class="text-center text-white/40 py-8 text-sm">
+            播放列表为空
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { Music } from 'lucide-vue-next'
+import { Music, Repeat, Repeat1, Shuffle, ListMusic, X } from 'lucide-vue-next'
 import { parseAmllLyrics } from '~/utils/amll-parser'
 import type { LyricLine, LyricWord } from '~/utils/amll-parser'
+import { useAudioStore } from '~/stores/audio'
 
 interface Props {
   lyricsData: { raw: string; format: 'ttml' | 'lrc' } | null
@@ -133,25 +276,84 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits<{ seek: [time: number] }>()
 
+const audioStore = useAudioStore()
 const containerRef = ref<HTMLElement | null>(null)
 const lineRefs = ref<HTMLElement[]>([])
 const scrollOffset = ref(0)
 const internalTime = ref(0)
+const showPlaylist = ref(false)
+
+// 播放模式
+type PlayMode = 'list' | 'single' | 'shuffle' | 'sequence'
+const playMode = ref<PlayMode>('list')
+
+const playModeIcon = computed(() => {
+  switch (playMode.value) {
+    case 'list': return Repeat
+    case 'single': return Repeat1
+    case 'shuffle': return Shuffle
+    case 'sequence': return Repeat
+    default: return Repeat
+  }
+})
+
+const playModeLabel = computed(() => {
+  switch (playMode.value) {
+    case 'list': return '列表循环'
+    case 'single': return '单曲循环'
+    case 'shuffle': return '随机播放'
+    case 'sequence': return '顺序播放'
+    default: return '列表循环'
+  }
+})
+
+function togglePlayMode() {
+  const modes: PlayMode[] = ['list', 'single', 'shuffle', 'sequence']
+  const currentIndex = modes.indexOf(playMode.value)
+  // 如果当前值不在数组中，默认从第一个开始；否则计算下一个索引
+  const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % modes.length
+  playMode.value = modes[nextIndex]!
+  
+  switch (playMode.value) {
+    case 'list':
+      audioStore.shuffle = false
+      audioStore.repeatMode = 'all'
+      break
+    case 'single':
+      audioStore.shuffle = false
+      audioStore.repeatMode = 'one'
+      break
+    case 'shuffle':
+      audioStore.shuffle = true
+      audioStore.repeatMode = 'off'
+      break
+    case 'sequence':
+      audioStore.shuffle = false
+      audioStore.repeatMode = 'off'
+      break
+  }
+}
+const isManualScrolling = ref(false)
+const scrollTimeHint = ref<string | null>(null)
 
 let animationFrame: number | null = null
 let lastTime = 0
+let manualScrollTimeout: ReturnType<typeof setTimeout> | null = null
+let visibleLineIndex = ref(-1)
 
 interface LyricGroup {
   original: LyricLine
   translation?: LyricLine
 }
 
-interface PauseSymbol {
-  index: number
-  startTime: number
-  endTime: number
-  duration: number
-}
+  interface PauseSymbol {
+    index: number
+    startTime: number
+    endTime: number
+    duration: number
+    glowStartTime: number
+    glowEndTime: number
+  }
 
 const amllLyrics = computed(() => {
   if (!props.lyricsData || !props.lyricsData.raw) return []
@@ -250,44 +452,49 @@ const groupedLyrics = computed(() => {
   return groups
 })
 
-// 检测歌词间隔中的暂停符号位置
-const pauseSymbols = computed(() => {
-  const groups = groupedLyrics.value!
-  const symbols: PauseSymbol[] = []!
-  
-  // 检测开头间奏（第一句歌词开始前的时间）
-  if (groups.length > 0 && groups[0] && groups[0].original.startTime > 5000) {
-    symbols.push({
-      index: -1,
-      startTime: 0,
-      endTime: groups[0].original.startTime,
-      duration: groups[0].original.startTime
-    })
-  }
-  
-  // 检测歌词之间的间隔
-  for (let i = 0; i < groups.length - 1; i++) {
-    const currentGroup = groups[i]!
-    const nextGroup = groups[i + 1]!
+  // 检测歌词间隔中的暂停符号位置
+  const pauseSymbols = computed(() => {
+    const groups = groupedLyrics.value!
+    const symbols: PauseSymbol[] = []!
     
-    const currentEnd = currentGroup.original.endTime || currentGroup.original.startTime
-    const nextStart = nextGroup.original.startTime
-    
-    const gap = nextStart - currentEnd
-    
-    // 检测间隔是否大于 5 秒（5000ms）
-    if (gap > 5000) {
+    // 检测开头间奏（第一句歌词开始前的时间 > 10秒）
+    if (groups.length > 0 && groups[0] && groups[0].original.startTime > 10000) {
+      const endTime = groups[0].original.startTime
       symbols.push({
-        index: i,
-        startTime: currentEnd,
-        endTime: nextStart,
-        duration: gap
+        index: -1,
+        startTime: 0,
+        endTime,
+        duration: endTime,
+        glowStartTime: endTime - 9000,
+        glowEndTime: endTime
       })
     }
-  }
-  
-  return symbols
-})
+    
+    // 检测歌词之间的间隔
+    for (let i = 0; i < groups.length - 1; i++) {
+      const currentGroup = groups[i]!
+      const nextGroup = groups[i + 1]!
+      
+      const currentEnd = currentGroup.original.endTime || currentGroup.original.startTime
+      const nextStart = nextGroup.original.startTime
+      
+      const gap = nextStart - currentEnd
+      
+      // 检测间隔是否大于 10 秒（10000ms）
+      if (gap > 10000) {
+        symbols.push({
+          index: i,
+          startTime: currentEnd,
+          endTime: nextStart,
+          duration: gap,
+          glowStartTime: nextStart - 9000,
+          glowEndTime: nextStart
+        })
+      }
+    }
+    
+    return symbols
+  })
 
 // 计算最长歌词行的字符数
 const maxLineLength = computed(() => {
@@ -357,36 +564,47 @@ function isWordLevel(line: LyricLine) {
   return line.words.length > 2 || props.lyricsData?.format === 'ttml'
 }
 
-// 判断暂停符号是否处于激活状态
-function isPauseActive(pause: PauseSymbol) {
-  const t = internalTime.value
-  return t >= pause.startTime && t <= pause.endTime
-}
+  // 判断间奏符号是否应该显示（在整个间奏期间都显示）
+  function isPauseActive(pause: PauseSymbol) {
+    const t = internalTime.value
+    return t >= pause.startTime && t <= pause.endTime
+  }
 
-// 获取暂停符号中每个点的透明度（依次循环激活）
+  // 判断间奏符号是否处于呼吸灯亮起状态（在亮起区间内，3秒周期）
+  function isPauseGlowing(pause: PauseSymbol) {
+    const t = internalTime.value
+    if (t < pause.glowStartTime || t > pause.glowEndTime) return false
+    const elapsed = t - pause.glowStartTime
+    const cycle = elapsed % 3000
+    return cycle < 1500
+  }
+
+// 获取暂停符号中每个点的透明度（间奏开始前9秒，每隔3秒亮起一个，点亮后保持）
 function getDotOpacity(pause: PauseSymbol, dotIndex: number) {
   const t = internalTime.value
-  if (t < pause.startTime) return 0.2
-  if (t > pause.endTime) return 0.2
   
-  const progress = (t - pause.startTime) / pause.duration
-  // 每个点循环激活，周期为 1 秒
-  const cycleDuration = 1.0
-  const dotOffset = dotIndex * 0.3
-  const cycleProgress = (progress * cycleDuration * 3 + dotOffset) % 1
+  // 间奏开始前9秒的时刻
+  const glowStartTime = pause.glowStartTime
   
-  // 正弦波让点亮度平滑变化
-  const baseOpacity = 0.3
-  const activeOpacity = 0.9
-  const wave = Math.sin(cycleProgress * Math.PI * 2) * 0.5 + 0.5
+  // 点0：glowStartTime 时刻亮起
+  // 点1：glowStartTime + 3000 时刻亮起
+  // 点2：glowStartTime + 6000 时刻亮起
+  const dotLightTime = glowStartTime + dotIndex * 3000
   
-  return baseOpacity + wave * (activeOpacity - baseOpacity)
+  if (t >= dotLightTime) {
+    return 1.0
+  }
+  
+  return 0.2
 }
 
 watch(amllLyrics, () => {
   lineRefs.value = []
   nextTick(() => {
-    updateActiveLine()
+    // 只在非手动滚动时更新滚动位置
+    if (!isManualScrolling.value) {
+      updateActiveLine()
+    }
   })
 })
 
@@ -398,6 +616,50 @@ function getWordProgress(word: LyricWord) {
   if (t < word.startTime) return 0
   if (t > word.endTime) return 100
   return ((t - word.startTime) / (word.endTime - word.startTime)) * 100
+}
+
+function getWordLift(word: LyricWord, line: LyricLine) {
+  const t = internalTime.value
+  const lineIndex = amllLyrics.value.indexOf(line)
+  const isActiveLine = activeIndex.value === lineIndex
+  
+  if (!isActiveLine) {
+    return 0
+  }
+  
+  const wordProgress = getWordProgress(word)
+  
+  if (wordProgress >= 100) {
+    return -5
+  } else if (wordProgress > 0) {
+    return -5 * (wordProgress / 100)
+  } else {
+    return 0
+  }
+}
+
+function getDotLift(pause: PauseSymbol, dotIndex: number) {
+  const t = internalTime.value
+  
+  if (!pause || !isPauseActive(pause)) {
+    return 0
+  }
+  
+  const dotLightTime = pause.glowStartTime + dotIndex * 3000
+  
+  if (t >= dotLightTime) {
+    return -5
+  }
+  
+  const timeUntilLight = dotLightTime - pause.glowStartTime
+  const totalGlowTime = pause.glowEndTime - pause.glowStartTime
+  
+  if (totalGlowTime <= 0) {
+    return 0
+  }
+  
+  const progress = timeUntilLight / totalGlowTime
+  return -5 * (1 - progress)
 }
 
 function getFullText(words: LyricWord[]) {
@@ -413,22 +675,115 @@ function handleSeek(timeMs: number) {
   }
 }
 
-const loop = () => {
-  const now = performance.now()
-  const delta = now - lastTime
-  lastTime = now
+function formatTime(ms: number) {
+  const totalSeconds = Math.floor(ms / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`
+}
 
-  if (props.isPlaying) {
-    const expectedMs = props.currentTime * 1000
-    if (Math.abs(internalTime.value - expectedMs) < 1000) {
-      internalTime.value += delta
-    } else {
-      internalTime.value = expectedMs
-    }
-  } else {
-    internalTime.value = props.currentTime * 1000
+function handleWheel(e: WheelEvent) {
+  if (!containerRef.value || groupedLyrics.value.length === 0) return
+
+  isManualScrolling.value = true
+  
+  // 清除之前的自动恢复计时器
+  if (manualScrollTimeout) {
+    clearTimeout(manualScrollTimeout)
   }
 
+  // 计算新的滚动偏移
+  const scrollSpeed = 0.8
+  scrollOffset.value -= e.deltaY * scrollSpeed
+
+  // 限制滚动范围
+  const firstLine = lineRefs.value[0]
+  const lastLine = lineRefs.value[lineRefs.value.length - 1]
+  
+  if (firstLine && lastLine) {
+    const viewportHeight = containerRef.value.clientHeight
+    const minOffset = -(lastLine.offsetTop + lastLine.clientHeight - viewportHeight * 0.35)
+    const maxOffset = -(firstLine.offsetTop - viewportHeight * 0.65)
+    
+    scrollOffset.value = Math.max(minOffset, Math.min(maxOffset, scrollOffset.value))
+  }
+
+  // 找到当前视口中心的歌词行
+  updateVisibleLine()
+
+  // 设置5秒后自动回到当前歌词
+  manualScrollTimeout = setTimeout(() => {
+    isManualScrolling.value = false
+    scrollTimeHint.value = null
+    updateActiveLine()
+  }, 5000)
+}
+
+function updateVisibleLine() {
+  if (!containerRef.value) return
+  
+  const viewportHeight = containerRef.value.clientHeight
+  const viewportCenter = -scrollOffset.value + viewportHeight * 0.35
+  
+  let closestIndex = -1
+  let closestDistance = Infinity
+  
+  const groups = groupedLyrics.value
+  for (let i = 0; i < lineRefs.value.length; i++) {
+    const el = lineRefs.value[i]
+    if (!el) continue
+    
+    const lineCenter = el.offsetTop + el.clientHeight / 2
+    const distance = Math.abs(lineCenter - viewportCenter)
+    
+    if (distance < closestDistance) {
+      closestDistance = distance
+      closestIndex = i
+    }
+  }
+  
+  if (closestIndex >= 0 && closestIndex !== visibleLineIndex.value) {
+    visibleLineIndex.value = closestIndex
+    const group = groups[closestIndex]
+    if (group) {
+      scrollTimeHint.value = formatTime(group.original.startTime)
+    }
+  }
+}
+
+let lastPropTime = -1
+let accumulatedTime = 0
+
+const loop = () => {
+  const now = performance.now()
+  
+  if (props.isPlaying) {
+    const delta = now - lastTime
+    
+    if (lastPropTime >= 0) {
+      const expectedPropTime = lastPropTime + (delta / 1000)
+      const actualPropTime = props.currentTime
+      
+      if (Math.abs(actualPropTime - expectedPropTime) > 1.0) {
+        internalTime.value = props.currentTime * 1000
+        accumulatedTime = props.currentTime * 1000
+      } else {
+        accumulatedTime += delta
+        internalTime.value = accumulatedTime
+      }
+    } else {
+      accumulatedTime = props.currentTime * 1000
+      internalTime.value = accumulatedTime
+    }
+    
+    lastPropTime = props.currentTime
+  } else {
+    accumulatedTime = props.currentTime * 1000
+    internalTime.value = accumulatedTime
+    lastPropTime = props.currentTime
+  }
+  
+  lastTime = now
   updateActiveLine()
   animationFrame = requestAnimationFrame(loop)
 }
@@ -449,7 +804,10 @@ function updateActiveLine() {
 
   if (idx !== activeIndex.value) {
     activeIndex.value = idx
-    calculateScroll(idx)
+    // 只在非手动滚动时更新滚动位置
+    if (!isManualScrolling.value) {
+      calculateScroll(idx)
+    }
   }
 }
 
@@ -464,16 +822,9 @@ function calculateScroll(idx: number) {
   scrollOffset.value = targetOffset
 }
 
-watch(() => props.currentTime, (t) => {
-  const expectedMs = t * 1000
-  if (Math.abs(internalTime.value - expectedMs) >= 800) {
-    internalTime.value = expectedMs
-    updateActiveLine()
-  }
-})
-
 onMounted(() => {
-  internalTime.value = props.currentTime * 1000
+  accumulatedTime = props.currentTime * 1000
+  internalTime.value = accumulatedTime
   lastTime = performance.now()
   animationFrame = requestAnimationFrame(loop)
   nextTick(() => {
@@ -483,6 +834,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (animationFrame) cancelAnimationFrame(animationFrame)
+  if (manualScrollTimeout) clearTimeout(manualScrollTimeout)
 })
 </script>
 
@@ -497,11 +849,22 @@ onUnmounted(() => {
   line-height: 1.4;
   transform-origin: left center;
   transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* 统一所有歌词行的总高度：翻译容器高度 + 行距 */
   margin-bottom: v-bind('`${lineSpacing}pt`');
 }
 
 .lyric-line.has-translation {
-  margin-bottom: 0;
+  /* 统一行间距，与普通歌词行相同 */
+  margin-bottom: v-bind('`${lineSpacing}pt`');
+}
+
+/* 多演唱者布局 */
+.lyric-content-wrapper {
+  max-width: 100%;
+}
+
+.lyric-line.singer-v2 .lyric-content-wrapper {
+  margin-left: auto;
 }
 
 .lyric-text {
@@ -512,9 +875,39 @@ onUnmounted(() => {
   transform-origin: left center;
 }
 
+.lyric-line.singer-v1 .lyric-text {
+  transform-origin: left center;
+}
+
+.lyric-line.singer-v2 .lyric-text {
+  transform-origin: right center;
+}
+
+.lyric-line:not(.singer-v1):not(.singer-v2) .lyric-text {
+  transform-origin: left center;
+}
+
+.word-wrapper {
+  position: relative;
+  display: inline-block;
+}
+
 /* 正在播放的活动行 */
 .lyric-line.is-active {
-  transform: scale(1.08) translateX(6px); /* 减小一点位移 */
+  transform: scale(1.08);
+  transition: transform 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.lyric-line.is-active.singer-v1 {
+  transform: scale(1.08) translateX(6px);
+}
+
+.lyric-line.is-active.singer-v2 {
+  transform: scale(1.08) translateX(-6px);
+}
+
+.lyric-line.is-active:not(.singer-v1):not(.singer-v2) {
+  transform: scale(1.08) translateX(6px);
 }
 
 .lyric-line.is-active .lyric-text {
@@ -525,6 +918,12 @@ onUnmounted(() => {
 .lyric-line.is-active .word-highlight {
   /* 逐字亮度的柔和处理 */
   text-shadow: 0 0 4px rgba(255, 255, 255, 0.3);
+}
+
+.lyric-line.is-active .word-wrapper {
+  /* 逐字歌词独立抬起 */
+  display: inline-block;
+  will-change: transform;
 }
 
 /* 已经播放过的歌词 */
@@ -580,26 +979,61 @@ onUnmounted(() => {
 
 .pause-line {
   opacity: 0;
-  transition: opacity 1s ease;
+  transition: opacity 0.3s ease, transform 0.3s ease;
   pointer-events: none;
   transform-origin: left center;
 }
 
 .pause-line.pause-active {
-  opacity: 0.6;
+  opacity: 1;
+  transform: scale(1.08) translateX(6px);
+  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.1));
+  transition: transform 0.8s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease;
+}
+
+.pause-line.pause-active .dot {
+  /* 间奏符号的每个点独立抬起 */
+  display: inline-block;
+  will-change: transform;
 }
 
 .pause-text {
   font-weight: 900;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(255, 255, 255, 0.9);
   display: inline-block;
+  transform-origin: left center;
+  transition: all 0.3s ease;
 }
 
 .dot {
-  margin-right: 0.3em;
+  margin-right: 0;
 }
 
 .dot:last-child {
   margin-right: 0;
+}
+
+/* 时间提示淡入淡出动画 */
+.time-fade-enter-active,
+.time-fade-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.time-fade-enter-from,
+.time-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-50%) translateX(10px);
+}
+
+/* 播放列表上滑动画 */
+.slide-up-enter-active,
+.slide-up-leave-active {
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+.slide-up-enter-from,
+.slide-up-leave-to {
+  transform: translate(-50%, 20px);
+  opacity: 0;
 }
 </style>

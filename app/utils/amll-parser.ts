@@ -14,6 +14,7 @@ export interface LyricLine {
   endTime: number
   isBG: boolean
   isDuet: boolean
+  singerId?: string
 }
 
 export function parseAmllLyrics(raw: string, format: 'ttml' | 'lrc', tlyric?: string | null): LyricLine[] {
@@ -95,7 +96,7 @@ function parseTtml(ttml: string): LyricLine[] {
     return 0
   }
 
-  // Match <p> elements with translate attribute
+  // Match <p> elements with translate attribute and ttm:agent
   const pRegex = /<p\b[^>]*\bbegin="([^"]+)"[^>]*\btranslate="([^"]*)"[^>]*>([\s\S]*?)<\/p>|<p\b[^>]*\bbegin="([^"]+)"[^>]*>([\s\S]*?)<\/p>/g
   let pMatch: RegExpExecArray | null
   
@@ -106,12 +107,18 @@ function parseTtml(ttml: string): LyricLine[] {
     const lineStartMs = timeToMs(pMatch[1] || pMatch[4]!)
     const translateAttr = pMatch[2] || '' // translate 属性值
     const innerHTML = pMatch[3] || pMatch[5] || ''
+    const fullPTag = pMatch[0]!
+    
+    // 提取 ttm:agent 属性（演唱者 ID）
+    const agentMatch = fullPTag.match(/\bttm:agent="([^"]+)"/)
+    const singerId = agentMatch ? agentMatch[1] : undefined
 
-    // 提取翻译歌词：优先使用 translate 属性，其次提取 <translate> 标签内容
+    // 提取翻译歌词：优先使用 translate 属性，其次提取 <translate> 标签或 x-translation 内容
     let translatedLyric = translateAttr.trim()
     
-    // 如果没有 translate 属性，尝试从 <translate> 子元素提取
+    // 如果没有 translate 属性，尝试从 <translate> 子元素或 ttm:role="x-translation" 提取
     if (!translatedLyric) {
+      // 匹配 <translate> 标签
       const translateTagRegex = /<translate[^>]*>([^<]*)<\/translate>/g
       let translateMatch: RegExpExecArray | null
       const translateTexts: string[] = []
@@ -121,29 +128,78 @@ function parseTtml(ttml: string): LyricLine[] {
           translateTexts.push(text)
         }
       }
+      
+      // 匹配 <span ttm:role="x-translation">翻译内容</span>
+      const xTransRegex = /<span[^>]*ttm:role="x-translation"[^>]*>([^<]*)<\/span>/g
+      let xTransMatch: RegExpExecArray | null
+      while ((xTransMatch = xTransRegex.exec(innerHTML)) !== null) {
+        const text = xTransMatch[1]?.trim()
+        if (text) {
+          translateTexts.push(text)
+        }
+      }
+      
       if (translateTexts.length > 0) {
         translatedLyric = translateTexts.join(' ')
       }
     }
 
-    const spanRegex = /<span\b[^>]*\bbegin="([^"]+)"(?:[^>]*\bend="([^"]+)")?[^>]*>([^<]+)<\/span>/g
-    let spanMatch: RegExpExecArray | null
+    // 提取所有 span 标签和它们之间的文本（包括空格）
     const words: LyricWord[] = []
+    let lastEndTime = lineStartMs
     
-    let lastSpanEnd = lineStartMs
-    while ((spanMatch = spanRegex.exec(innerHTML)) !== null) {
-      const wStartMs = timeToMs(spanMatch[1]!)
-      const wEndMs = spanMatch[2] ? timeToMs(spanMatch[2]!) : wStartMs + 500
-      const wText = spanMatch[3]!
-      
-      words.push({
-        startTime: wStartMs,
-        endTime: wEndMs,
-        word: wText,
-        romanWord: '',
-        obscene: false
-      })
-      lastSpanEnd = Math.max(lastSpanEnd, wEndMs)
+    // 使用 DOM 解析器提取 span 和它们之间的文本
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(`<div>${innerHTML}</div>`, 'text/html')
+    const container = doc.querySelector('div')
+    
+    if (container) {
+      // 遍历所有子节点（包括文本节点和元素节点）
+      for (const node of Array.from(container.childNodes)) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          // 文本节点 - 包含空格
+          const text = node.textContent || ''
+          if (text.trim() === '' && text.length > 0) {
+            // 纯空格，为每个字符创建词
+            for (let i = 0; i < text.length; i++) {
+              const ch = text[i]!
+              words.push({
+                startTime: lastEndTime,
+                endTime: lastEndTime,
+                word: ch,
+                romanWord: '',
+                obscene: false
+              })
+            }
+          }
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+          const span = node as HTMLElement
+          if (span.tagName === 'SPAN') {
+            // 检查是否有 begin 属性
+            const beginAttr = span.getAttribute('begin')
+            const endAttr = span.getAttribute('end')
+            
+            if (beginAttr) {
+              const wStartMs = timeToMs(beginAttr)
+              const wEndMs = endAttr ? timeToMs(endAttr) : wStartMs + 500
+              const wText = span.textContent || ''
+              
+              // 跳过翻译和罗马音
+              const roleAttr = span.getAttribute('ttm:role')
+              if (!roleAttr) {
+                words.push({
+                  startTime: wStartMs,
+                  endTime: wEndMs,
+                  word: wText,
+                  romanWord: '',
+                  obscene: false
+                })
+                lastEndTime = wEndMs
+              }
+            }
+          }
+        }
+      }
     }
 
     if (words.length > 0) {
@@ -157,7 +213,8 @@ function parseTtml(ttml: string): LyricLine[] {
         startTime: words[0]!.startTime,
         endTime: lineEndMs,
         isBG: false,
-        isDuet: false
+        isDuet: false,
+        singerId
       })
     } else {
       // Fallback if no spans found but p has text
@@ -176,7 +233,8 @@ function parseTtml(ttml: string): LyricLine[] {
           startTime: lineStartMs,
           endTime: lineStartMs + 3000,
           isBG: false,
-          isDuet: false
+          isDuet: false,
+          singerId
         })
       }
     }

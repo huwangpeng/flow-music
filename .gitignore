@@ -9,7 +9,7 @@ storage
 dist
 data
 .trae
-
+.opencode
 # Node dependencies
 node_modules
 

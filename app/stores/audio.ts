@@ -4,20 +4,21 @@ import type { AudioTrack } from '~/types/audio'
 
 export const useAudioStore = defineStore('audio', () => {
   
-  // 状态
-  const currentTrack = ref<AudioTrack | null>(null)
-  const isPlaying = ref(false)
-  const volume = ref(0.8)
-  const isMuted = ref(false)
-  const currentTime = ref(0)
-  const duration = ref(0)
-  const shuffle = ref(false)
-  const repeatMode = ref<'off' | 'all' | 'one'>('off')
-  const queue = ref<AudioTrack[]>([])
-  const queueIndex = ref(-1)
-  const audioElement = ref<HTMLAudioElement | null>(null)
-  const currentLyrics = ref<Array<{ time: number; text: string }> | null>(null)
-  const bufferedPercent = ref(0)
+// 状态
+const currentTrack = ref<AudioTrack | null>(null)
+const isPlaying = ref(false)
+const volume = ref(0.8)
+const isMuted = ref(false)
+const currentTime = ref(0)
+const duration = ref(0)
+const shuffle = ref(false)
+const repeatMode = ref<'off' | 'all' | 'one'>('off')
+const queue = ref<AudioTrack[]>([])
+const queueIndex = ref(-1)
+const audioElement = ref<HTMLAudioElement | null>(null)
+const currentLyrics = ref<Array<{ time: number; text: string }> | null>(null)
+const bufferedPercent = ref(0)
+const isShuffled = ref(false) // 添加此状态来跟踪队列是否已打乱
 
   // 计算属性
   const hasNext = computed(() => {
@@ -38,37 +39,41 @@ export const useAudioStore = defineStore('audio', () => {
   function initAudio() {
     if (!audioElement.value) {
       audioElement.value = new Audio()
-      
-      audioElement.value.addEventListener('timeupdate', () => {
-        currentTime.value = audioElement.value!.currentTime
-      })
-      
-      audioElement.value.addEventListener('loadedmetadata', () => {
-        duration.value = audioElement.value!.duration
-      })
-      
-      audioElement.value.addEventListener('ended', () => {
-        handleTrackEnd()
-      })
-      
-      audioElement.value.addEventListener('play', () => {
-        isPlaying.value = true
-      })
-      
-      audioElement.addEventListener('pause', () => {
-        isPlaying.value = false
-      })
-      
-      // 监听缓冲进度
-      audioElement.value.addEventListener('progress', () => {
-        if (audioElement.value && duration.value > 0) {
-          const buffered = audioElement.value.buffered
-          if (buffered.length > 0) {
-            const bufferedEnd = buffered.end(buffered.length - 1)
-            bufferedPercent.value = Math.min(100, (bufferedEnd / duration.value) * 100)
-          }
+    }
+    
+    // 确保事件监听器被注册（移除旧的监听器避免重复）
+    audioElement.value.ontimeupdate = () => {
+      if (audioElement.value) {
+        currentTime.value = audioElement.value.currentTime
+      }
+    }
+    
+    audioElement.value.onloadedmetadata = () => {
+      if (audioElement.value) {
+        duration.value = audioElement.value.duration
+      }
+    }
+    
+    audioElement.value.onended = () => {
+      handleTrackEnd()
+    }
+    
+    audioElement.value.onplay = () => {
+      isPlaying.value = true
+    }
+    
+    audioElement.value.onpause = () => {
+      isPlaying.value = false
+    }
+    
+    audioElement.value.onprogress = () => {
+      if (audioElement.value && duration.value > 0) {
+        const buffered = audioElement.value.buffered
+        if (buffered.length > 0) {
+          const bufferedEnd = buffered.end(buffered.length - 1)
+          bufferedPercent.value = Math.min(100, (bufferedEnd / duration.value) * 100)
         }
-      })
+      }
     }
   }
 
@@ -119,8 +124,8 @@ export const useAudioStore = defineStore('audio', () => {
     currentTrack.value = track
     
     // 加载歌词（如果有）
-    if (track.lyrics) {
-      currentLyrics.value = track.lyrics
+    if (track.lyrics && Array.isArray(track.lyrics)) {
+      currentLyrics.value = track.lyrics as Array<{ time: number; text: string }>
     } else {
       currentLyrics.value = null
     }
@@ -128,7 +133,9 @@ export const useAudioStore = defineStore('audio', () => {
     if (track.filePath) {
       audioElement.value!.src = track.filePath
       audioElement.value!.load()
-      audioElement.value!.play().catch(error => {
+      audioElement.value!.play().then(() => {
+        isPlaying.value = true
+      }).catch(error => {
         console.error('播放失败:', error)
         isPlaying.value = false
       })
@@ -173,51 +180,61 @@ export const useAudioStore = defineStore('audio', () => {
     bufferedPercent.value = 0
   }
 
-  function playNext() {
-    if (!hasNext.value) return
-    
-    if (shuffle.value) {
-      const nextIndex = Math.floor(Math.random() * queue.value.length)
-      queueIndex.value = nextIndex
-    } else {
-      queueIndex.value++
-    }
-    
-    const next = queue.value[queueIndex.value]
-    if (next) {
-      currentTrack.value = next
-      if (audioElement.value && next.filePath) {
-        audioElement.value.src = next.filePath
-        audioElement.value.load()
-        audioElement.value.play()
-      }
-      currentTime.value = 0
-      isPlaying.value = true
-    }
-  }
+   function playNext() {
+     if (!hasNext.value) return
+     
+     if (shuffle.value) {
+       // 如果尚未打乱队列，先打乱一次
+       if (!isShuffled.value) {
+         shuffleQueue()
+       }
+       // 按顺序播放已打乱的队列
+       queueIndex.value++
+     } else {
+       queueIndex.value++
+     }
+     
+     const next = queue.value[queueIndex.value]
+     if (next) {
+       currentTrack.value = next
+       if (audioElement.value && next.filePath) {
+         audioElement.value.src = next.filePath
+         audioElement.value.load()
+         audioElement.value.play()
+       }
+       currentTime.value = 0
+       isPlaying.value = true
+     }
+   }
 
-  function playPrevious() {
-    if (!hasPrevious.value) return
-    
-    if (shuffle.value) {
-      const prevIndex = Math.floor(Math.random() * queue.value.length)
-      queueIndex.value = prevIndex
-    } else {
-      queueIndex.value--
-    }
-    
-    const prev = queue.value[queueIndex.value]
-    if (prev) {
-      currentTrack.value = prev
-      if (audioElement.value && prev.filePath) {
-        audioElement.value.src = prev.filePath
-        audioElement.value.load()
-        audioElement.value.play()
-      }
-      currentTime.value = 0
-      isPlaying.value = true
-    }
-  }
+   function playPrevious() {
+     if (!hasPrevious.value) return
+     
+     if (shuffle.value) {
+       // 打乱模式下按顺序播放已打乱的队列（与playNext保持一致）
+       if (isShuffled.value && queueIndex.value > 0) {
+         queueIndex.value--
+       } else {
+         // 重新打乱队列
+         shuffleQueue()
+         queueIndex.value = queue.value.length - 1 // 播放最后一首（因为是逆序）
+       }
+     } else {
+       queueIndex.value--
+     }
+     
+     const prev = queue.value[queueIndex.value]
+     if (prev) {
+       currentTrack.value = prev
+       if (audioElement.value && prev.filePath) {
+         audioElement.value.src = prev.filePath
+         audioElement.value.load()
+         audioElement.value.play()
+       }
+       currentTime.value = 0
+       isPlaying.value = true
+     }
+   }
 
   function setVolume(newVolume: number) {
     volume.value = Math.max(0, Math.min(1, newVolume))
@@ -246,14 +263,47 @@ export const useAudioStore = defineStore('audio', () => {
   function setRepeatMode(mode: 'off' | 'all' | 'one') {
     const modes: ('off' | 'all' | 'one')[] = ['off', 'all', 'one']
     const currentIndex = modes.indexOf(repeatMode.value)
-    repeatMode.value = modes[(currentIndex + 1) % modes.length]
+    repeatMode.value = modes[(currentIndex + 1) % modes.length] as 'off' | 'all' | 'one'
   }
 
-  function toggleShuffle() {
-    shuffle.value = !shuffle.value
-  }
+   function shuffleQueue() {
+     const currentTrackId = currentTrack.value?.id
+     const currentTrackIndex = queueIndex.value
+     
+     // 创建新数组进行打乱
+     const shuffled = [...queue.value]
+     for (let i = shuffled.length - 1; i > 0; i--) {
+       const j = Math.floor(Math.random() * (i + 1))
+       const temp = shuffled[i]!
+       shuffled[i] = shuffled[j]!
+       shuffled[j] = temp
+     }
+     
+     // 如果当前有歌曲播放，将其放到第一位
+     if (currentTrackId !== undefined) {
+       const currentIdx = shuffled.findIndex(t => t.id === currentTrackId)
+       if (currentIdx > 0) {
+         const temp = shuffled[0]!
+         shuffled[0] = shuffled[currentIdx]!
+         shuffled[currentIdx] = temp
+       }
+       queueIndex.value = 0
+     }
+     
+     queue.value = shuffled
+     isShuffled.value = true
+   }
 
-  function addToQueue(track: AudioTrack) {
+   function toggleShuffle() {
+     shuffle.value = !shuffle.value
+     if (shuffle.value) {
+       shuffleQueue()
+     } else {
+       isShuffled.value = false
+     }
+   }
+
+   function addToQueue(track: AudioTrack) {
     queue.value.push(track)
   }
 

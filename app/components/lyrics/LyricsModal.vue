@@ -85,27 +85,28 @@
 
             <!-- 右侧：歌词部分 (约占 55%) -->
             <div class="flex-1 h-[85vh] w-full flex flex-col justify-center relative mask-lyrics text-left">
-            <!-- 加载中 -->
-            <div v-if="isLoadingLyrics" class="flex flex-col items-center justify-center h-full text-gray-500">
-              <div class="w-8 h-8 border-2 border-gray-600 border-t-white rounded-full animate-spin mb-4" />
-              <p class="text-sm">正在获取歌词...</p>
-            </div>
+              <!-- 加载中 -->
+              <div v-if="isLoadingLyrics" class="flex flex-col items-center justify-center h-full text-gray-500">
+                <div class="w-8 h-8 border-2 border-gray-600 border-t-white rounded-full animate-spin mb-4" />
+                <p class="text-sm">正在获取歌词...</p>
+              </div>
 
-            <!-- AMLL 歌词 -->
-            <AMLLyrics
-              v-else-if="lyricsData && lyricsData.raw"
-              :currentTime="currentTime"
-              :is-playing="isPlaying"
-              class="h-full"
-              @seek="$emit('seek', $event)"
-              :lyricsData="lyricsData"
-            />
+              <!-- AMLL 歌词 -->
+              <AMLLyrics
+                v-else-if="lyricsData && lyricsData.raw"
+                :currentTime="currentTime"
+                :is-playing="isPlaying"
+                class="h-full"
+                @seek="$emit('seek', $event)"
+                :lyricsData="lyricsData"
+              />
 
-            <!-- 无歌词 -->
-            <div v-else class="flex flex-col items-center justify-center h-full text-gray-600">
-              <Music class="w-20 h-20 mb-4 opacity-20" />
-              <p class="text-lg">暂无歌词</p>
-              <p class="text-sm mt-2">享受音乐即可 🎵</p>
+              <!-- 无歌词 -->
+              <div v-else class="flex flex-col items-center justify-center h-full text-gray-600">
+                <Music class="w-20 h-20 mb-4 opacity-20" />
+                <p class="text-lg">暂无歌词</p>
+                <p class="text-sm mt-2">享受音乐即可 🎵</p>
+              </div>
             </div>
           </div>
 
@@ -116,7 +117,6 @@
           >
             <X class="w-6 h-6" />
           </button>
-          </div>
         </div>
       </Transition>
     </Teleport>
