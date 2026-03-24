@@ -1,6 +1,6 @@
 import { defineEventHandler, getQuery, createError } from 'h3'
 import { join } from 'path'
-import { readFile } from 'fs/promises'
+import { readFile, writeFile, mkdir } from 'fs/promises'
 import { existsSync } from 'fs'
 import { getLyricsPath } from '~/server/utils/paths'
 
@@ -21,7 +21,7 @@ function parseLrc(lrc: string): LyricLine[] {
     const ms = parseInt(match[3]!.padEnd(3, '0').slice(0, 3))
     const text = (match[4] ?? '').trim()
     // 过滤掉空行和纯元数据行
-    if (text && !text.match(/^(作词|作曲|编曲|制作人|混音|录音)/)) {
+    if (text && !text.match(/^(作词 | 作曲 | 编曲 | 制作人 | 混音 | 录音)/)) {
       lines.push({ time: min * 60 + sec + ms / 1000, text })
     }
   }
@@ -69,6 +69,22 @@ function parseTtml(ttml: string): LyricLine[] {
   return lines
 }
 
+// ===== TTML 转 LRC 格式 =====
+function ttmlToLrc(ttml: string): string {
+  const lines = parseTtml(ttml)
+  const lrcLines: string[] = []
+  
+  for (const line of lines) {
+    const min = Math.floor(line.time / 60)
+    const sec = Math.floor(line.time % 60)
+    const ms = Math.floor((line.time % 1) * 1000)
+    const timeTag = `[${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(ms).padStart(3, '0')}]`
+    lrcLines.push(`${timeTag}${line.text}`)
+  }
+  
+  return lrcLines.join('\n')
+}
+
 // ===== 搜索 + 获取网易云歌曲 ID =====
 
 async function searchNeteaseId(title: string, artist: string): Promise<number | null> {
@@ -94,7 +110,7 @@ async function searchNeteaseId(title: string, artist: string): Promise<number | 
 
 // ===== AMLL DB 获取 TTML 逐字歌词 =====
 
-async function fetchAmllTtml(neteaseId: number): Promise<LyricLine[] | null> {
+async function fetchAmllTtml(neteaseId: number): Promise<string | null> {
   // amlldb.bikonoo.com 存储路径：/ncm-lyrics/{id}.ttml
   const urls = [
     `https://amlldb.bikonoo.com/ncm-lyrics/${neteaseId}.ttml`,
@@ -111,10 +127,11 @@ async function fetchAmllTtml(neteaseId: number): Promise<LyricLine[] | null> {
       const res = await fetch(url, { headers })
       if (!res.ok) continue
       const ttml = await res.text()
+      // 验证 TTML 是否包含有效内容
       const lines = parseTtml(ttml)
       if (lines.length > 0) {
         console.log(`[lyrics] AMLL TTML found for ${neteaseId} from ${url}`)
-        return lines
+        return ttml
       }
     } catch {
       continue
@@ -123,8 +140,36 @@ async function fetchAmllTtml(neteaseId: number): Promise<LyricLine[] | null> {
   return null
 }
 
+// ===== 保存 TTML 和 LRC 到本地 =====
+async function saveTtmlAndLrc(trackId: string, ttml: string) {
+  try {
+    const lyricsDir = getLyricsPath()
+    if (!existsSync(lyricsDir)) {
+      await mkdir(lyricsDir, { recursive: true })
+    }
+
+    // 保存原始 TTML 文件
+    const ttmlPath = join(lyricsDir, `${trackId}.ttml`)
+    await writeFile(ttmlPath, ttml, 'utf-8')
+    console.log(`[lyrics] Saved TTML for ${trackId}`)
+
+    // 保存转换后的 LRC 文件
+    const lrc = ttmlToLrc(ttml)
+    const lrcPath = join(lyricsDir, `${trackId}.lrc`)
+    await writeFile(lrcPath, lrc, 'utf-8')
+    console.log(`[lyrics] Saved LRC for ${trackId}`)
+  } catch (error) {
+    console.error('[lyrics] Failed to save TTML and LRC:', error)
+  }
+}
+
+interface NeteaseLrcResult {
+  lrc: string
+  tlyric?: string
+}
+
 // ===== 网易云 获取原始 LRC =====
-async function fetchNeteaseLrc(neteaseId: number): Promise<string | null> {
+async function fetchNeteaseLrc(neteaseId: number): Promise<NeteaseLrcResult | null> {
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
     'Referer': 'https://music.163.com/',
@@ -132,7 +177,10 @@ async function fetchNeteaseLrc(neteaseId: number): Promise<string | null> {
   try {
     const res = await fetch(`https://music.163.com/api/song/lyric?id=${neteaseId}&lv=1&kv=1&tv=-1`, { headers })
     const data = await res.json()
-    return (data?.lrc?.lyric as string) || null
+    const lrc = (data?.lrc?.lyric as string) || null
+    const tlyric = (data?.tlyric?.lyric as string) || null
+    if (!lrc) return null
+    return { lrc, tlyric: tlyric || undefined }
   } catch {
     return null
   }
@@ -147,30 +195,25 @@ export default defineEventHandler(async (event) => {
 
   // 1. 优先尝试加载本地缓存的歌词文件
   if (trackId) {
-    const localLyricsPath = join(getLyricsPath(), `${trackId}.json`)
-    if (existsSync(localLyricsPath)) {
+    // 优先读取 TTML 格式，其次读取 LRC 格式
+    const ttmlPath = join(getLyricsPath(), `${trackId}.ttml`)
+    const lrcPath = join(getLyricsPath(), `${trackId}.lrc`)
+    
+    if (existsSync(ttmlPath)) {
       try {
-        const content = await readFile(localLyricsPath, 'utf-8')
-        // 如果本地存的是 JSON 字符串（数组或对象），直接返回
-        let raw = content
-        let format: 'lrc' | 'ttml' = 'lrc'
-        
-        try {
-          const parsed = JSON.parse(content)
-          if (Array.isArray(parsed)) {
-            // 如果已经是解析后的数组格式，为了兼容前端期望的 raw 字符串逻辑，我们需要做处理
-            // 或者直接返回 success: true 并让前端识别
-            return { success: true, source: 'local', format: 'lrc', raw: content, trackId }
-          }
-          if (typeof parsed === 'string') raw = parsed
-        } catch {}
-
-        // 判断格式
-        if (raw.includes('<tt') || raw.includes('<p')) format = 'ttml'
-        
-        return { success: true, source: 'local', format, raw, trackId }
+        const ttml = await readFile(ttmlPath, 'utf-8')
+        return { success: true, source: 'local', format: 'ttml', raw: ttml, trackId }
       } catch (e) {
-        console.warn('[lyrics] Failed to read local lyrics:', e)
+        console.warn('[lyrics] Failed to read local TTML:', e)
+      }
+    }
+    
+    if (existsSync(lrcPath)) {
+      try {
+        const lrc = await readFile(lrcPath, 'utf-8')
+        return { success: true, source: 'local', format: 'lrc', raw: lrc, trackId }
+      } catch (e) {
+        console.warn('[lyrics] Failed to read local LRC:', e)
       }
     }
   }
@@ -186,14 +229,41 @@ export default defineEventHandler(async (event) => {
     return { success: false, source: 'none' }
   }
 
+  // 3. 获取 TTML 格式歌词
   const ttml = await fetchAmllTtml(neteaseId)
   if (ttml) {
+    // 同时保存 TTML 和 LRC 到本地
+    if (trackId) {
+      await saveTtmlAndLrc(trackId, ttml)
+    }
     return { success: true, source: 'amll-ttml', format: 'ttml', raw: ttml, neteaseId }
   }
 
-  const lrc = await fetchNeteaseLrc(neteaseId)
-  if (lrc) {
-    return { success: true, source: 'netease-lrc', format: 'lrc', raw: lrc, neteaseId }
+  // 4. 获取 LRC 格式歌词
+  const lrcResult = await fetchNeteaseLrc(neteaseId)
+  if (lrcResult) {
+    // 保存 LRC 到本地
+    if (trackId) {
+      try {
+        const lyricsDir = getLyricsPath()
+        if (!existsSync(lyricsDir)) {
+          await mkdir(lyricsDir, { recursive: true })
+        }
+        const lrcPath = join(lyricsDir, `${trackId}.lrc`)
+        await writeFile(lrcPath, lrcResult.lrc, 'utf-8')
+        console.log(`[lyrics] Saved LRC for ${trackId}`)
+      } catch (e) {
+        console.warn('[lyrics] Failed to save LRC:', e)
+      }
+    }
+    return { 
+      success: true, 
+      source: 'netease-lrc', 
+      format: 'lrc', 
+      raw: lrcResult.lrc, 
+      tlyric: lrcResult.tlyric,
+      neteaseId 
+    }
   }
 
   return { success: false, source: 'none' }

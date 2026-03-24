@@ -156,7 +156,7 @@ interface PauseSymbol {
 const amllLyrics = computed(() => {
   if (!props.lyricsData || !props.lyricsData.raw) return []
   try {
-    return parseAmllLyrics(props.lyricsData.raw, props.lyricsData.format)
+    return parseAmllLyrics(props.lyricsData.raw, props.lyricsData.format, props.tlyric)
   } catch (e) {
     console.warn('解析歌词失败:', e)
     return []
@@ -172,7 +172,7 @@ const groupedLyrics = computed(() => {
     const current = lyrics[i]!
     const next = lyrics[i + 1]!
     
-    // 检测是否有下一行且时间戳相同
+    // 检测是否有下一行且时间戳相同（TTML 格式的双语歌词）
     if (next && Math.abs(next.startTime - current.startTime) < 50) {
       // 相同时间戳，配对为原句 + 翻译
       groups.push({
@@ -181,10 +181,34 @@ const groupedLyrics = computed(() => {
       })
       i += 2
     } else {
-      // 单独一行
-      groups.push({
-        original: current
-      })
+      // 检查当前行是否有 translatedLyric 字段（LRC 格式的翻译歌词）
+      const translatedText = current.translatedLyric?.trim()
+      if (translatedText) {
+        // 有翻译歌词，创建一个虚拟的 translation 行
+        groups.push({
+          original: current,
+          translation: {
+            words: [{
+              startTime: current.startTime,
+              endTime: current.endTime,
+              word: translatedText,
+              romanWord: '',
+              obscene: false
+            }],
+            translatedLyric: translatedText,
+            romanLyric: '',
+            startTime: current.startTime,
+            endTime: current.endTime,
+            isBG: false,
+            isDuet: false
+          }
+        })
+      } else {
+        // 单独一行，无翻译
+        groups.push({
+          original: current
+        })
+      }
       i++
     }
   }
@@ -284,9 +308,24 @@ const availableWidth = computed(() => {
 // 根据最长歌词和可用宽度计算字体大小
 const baseFontSize = computed(() => {
   const maxWidth = availableWidth.value
-  const maxLength = maxLineLength.value
-  // 假设每个字符大约占用 0.6 倍字体大小的宽度
-  const fontSize = maxWidth / (maxLength * 0.6)
+  const lyrics = amllLyrics.value
+  
+  // 区分中英文字符宽度系数，英文 0.45，中文 0.6
+  let totalWidth = 0
+  lyrics.forEach(line => {
+    const text = getFullText(line.words)
+    for (const char of text) {
+      // 判断是否为中文字符（包括日文、韩文等 CJK 字符）
+      if (/\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/u.test(char)) {
+        totalWidth += 0.6
+      } else {
+        totalWidth += 0.45
+      }
+    }
+  })
+  
+  const avgWidth = lyrics.length > 0 ? totalWidth / lyrics.length : 1
+  const fontSize = maxWidth / (avgWidth * 0.6)
   // 限制字体大小范围
   return Math.min(Math.max(fontSize, 24), 48)
 })
@@ -508,9 +547,12 @@ onUnmounted(() => {
 
 .translated-text-wrapper {
   height: 0;
-  overflow: hidden;
+  overflow: visible;
   transition: height 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-  margin-left: 12%;
+  margin-left: auto;
+  position: relative;
+  z-index: 10;
+  text-align: left;
 }
 
 .translated-text-wrapper.translate-enter {
@@ -521,17 +563,18 @@ onUnmounted(() => {
   font-family: 'HarmonyOS Sans SC', 'HarmonyOS Sans', 'PingFang SC', sans-serif !important;
   font-weight: 900 !important;
   opacity: 0;
-  transform: translateX(-20px);
   transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
   color: rgba(255, 255, 255, 0.6);
+  position: relative;
+  z-index: 11;
+  display: block;
 }
 
 .translated-text-wrapper.translate-enter .translated-text {
   opacity: 1;
-  transform: translateX(-12px);
   color: rgba(255, 255, 255, 0.9);
 }
 

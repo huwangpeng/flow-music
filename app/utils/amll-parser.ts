@@ -95,13 +95,36 @@ function parseTtml(ttml: string): LyricLine[] {
     return 0
   }
 
-  // Match <p> elements
-  const pRegex = /<p\b[^>]*\bbegin="([^"]+)"[^>]*>([\s\S]*?)<\/p>/g
+  // Match <p> elements with translate attribute
+  const pRegex = /<p\b[^>]*\bbegin="([^"]+)"[^>]*\btranslate="([^"]*)"[^>]*>([\s\S]*?)<\/p>|<p\b[^>]*\bbegin="([^"]+)"[^>]*>([\s\S]*?)<\/p>/g
   let pMatch: RegExpExecArray | null
   
   while ((pMatch = pRegex.exec(ttml)) !== null) {
-    const lineStartMs = timeToMs(pMatch[1]!)
-    const innerHTML = pMatch[2] ?? ''
+    // 匹配结果有两种情况：
+    // 1. 有 translate 属性：pMatch[1]=begin, pMatch[2]=translate, pMatch[3]=innerHTML
+    // 2. 无 translate 属性：pMatch[4]=begin, pMatch[5]=innerHTML
+    const lineStartMs = timeToMs(pMatch[1] || pMatch[4]!)
+    const translateAttr = pMatch[2] || '' // translate 属性值
+    const innerHTML = pMatch[3] || pMatch[5] || ''
+
+    // 提取翻译歌词：优先使用 translate 属性，其次提取 <translate> 标签内容
+    let translatedLyric = translateAttr.trim()
+    
+    // 如果没有 translate 属性，尝试从 <translate> 子元素提取
+    if (!translatedLyric) {
+      const translateTagRegex = /<translate[^>]*>([^<]*)<\/translate>/g
+      let translateMatch: RegExpExecArray | null
+      const translateTexts: string[] = []
+      while ((translateMatch = translateTagRegex.exec(innerHTML)) !== null) {
+        const text = translateMatch[1]?.trim()
+        if (text) {
+          translateTexts.push(text)
+        }
+      }
+      if (translateTexts.length > 0) {
+        translatedLyric = translateTexts.join(' ')
+      }
+    }
 
     const spanRegex = /<span\b[^>]*\bbegin="([^"]+)"(?:[^>]*\bend="([^"]+)")?[^>]*>([^<]+)<\/span>/g
     let spanMatch: RegExpExecArray | null
@@ -129,7 +152,7 @@ function parseTtml(ttml: string): LyricLine[] {
       const lineEndMs = words[words.length - 1]!.endTime
       lines.push({
         words,
-        translatedLyric: '',
+        translatedLyric,
         romanLyric: '',
         startTime: words[0]!.startTime,
         endTime: lineEndMs,
@@ -138,7 +161,7 @@ function parseTtml(ttml: string): LyricLine[] {
       })
     } else {
       // Fallback if no spans found but p has text
-      const cleanText = innerHTML.replace(/<[^>]+>/g, '').trim()
+      const cleanText = innerHTML.replace(/<[^>]+>/g, '').replace(/<translate[^>]*>[^<]*<\/translate>/g, '').trim()
       if (cleanText) {
         lines.push({
           words: [{
@@ -148,7 +171,7 @@ function parseTtml(ttml: string): LyricLine[] {
             romanWord: '',
             obscene: false
           }],
-          translatedLyric: '',
+          translatedLyric,
           romanLyric: '',
           startTime: lineStartMs,
           endTime: lineStartMs + 3000,

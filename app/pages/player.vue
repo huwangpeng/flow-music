@@ -23,20 +23,23 @@
       <!-- 左侧：封面 + 信息 + 播控 (约占 45%) -->
       <div class="w-[45%] flex-shrink-0 flex flex-col justify-center pr-12 lg:pr-24">
         <!-- 封面 -->
-        <div
-          :class="['w-full max-w-[460px] aspect-square rounded-2xl overflow-hidden mb-12 transition-all duration-700', isPlaying ? 'scale-100 shadow-2xl' : 'scale-90 opacity-80 shadow-xl']"
-          style="box-shadow: 0 40px 100px rgba(0,0,0,0.6)"
-        >
-          <img
-            v-if="track?.coverUrl || track?.coverArtId"
-            :src="track.coverUrl || `/api/cover/${track.coverArtId}`"
-            :alt="track.title"
-            class="w-full h-full object-cover"
-          />
-          <div v-else class="w-full h-full bg-gray-800/80 flex items-center justify-center backdrop-blur-md">
-            <Music class="w-32 h-32 text-gray-400" />
+        <Transition name="cover-fade" mode="out-in">
+          <div
+            :key="track?.uuid || 'no-track'"
+            :class="['w-full max-w-[460px] aspect-square rounded-2xl overflow-hidden mb-12 transition-all duration-700', isPlaying ? 'scale-100 shadow-2xl' : 'scale-90 opacity-80 shadow-xl']"
+            style="box-shadow: 0 40px 100px rgba(0,0,0,0.6)"
+          >
+            <img
+              v-if="track?.coverUrl || track?.coverArtId"
+              :src="track.coverUrl || `/api/cover/${track.coverArtId}`"
+              :alt="track.title"
+              class="w-full h-full object-cover"
+            />
+            <div v-else class="w-full h-full bg-gray-800/80 flex items-center justify-center backdrop-blur-md">
+              <Music class="w-32 h-32 text-gray-400" />
+            </div>
           </div>
-        </div>
+        </Transition>
 
         <!-- 歌名 + 歌手（左对齐） -->
         <div class="text-left mb-10 w-full max-w-[460px]">
@@ -102,6 +105,7 @@
           class="absolute inset-0 w-full h-full"
           @seek="handleSeek"
           :lyricsData="lyricsData"
+          :tlyric="lyricsData?.tlyric"
         />
 
         <!-- 无歌词 -->
@@ -116,7 +120,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Music, ChevronDown, Play, Pause, SkipBack, SkipForward } from 'lucide-vue-next'
 import AMLLyrics from '~/components/lyrics/AMLLyrics.vue'
@@ -136,7 +140,7 @@ const duration = computed(() => audioStore.duration)
 const isPlaying = computed(() => audioStore.isPlaying)
 
 const isLoadingLyrics = ref(false)
-const lyricsData = ref<{ raw: string; format: 'ttml' | 'lrc' } | null>(null)
+const lyricsData = ref<{ raw: string; format: 'ttml' | 'lrc'; tlyric?: string } | null>(null)
 
 const progressPercent = computed(() => {
   if (!duration.value) return 0
@@ -161,16 +165,42 @@ function handleSeek(time: number) {
   audioStore.seek(time)
 }
 
+function handleKeyboardEvent(e: KeyboardEvent) {
+  // 如果用户在输入框或可编辑元素中，不触发快捷键
+  if (e.target instanceof HTMLElement && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
+    return
+  }
+
+  switch (e.key) {
+    case ' ':
+      e.preventDefault()
+      audioStore.togglePlay()
+      break
+    case 'ArrowUp':
+      e.preventDefault()
+      audioStore.playPrevious()
+      break
+    case 'ArrowDown':
+      e.preventDefault()
+      audioStore.playNext()
+      break
+    case 'Escape':
+      e.preventDefault()
+      router.back()
+      break
+  }
+}
+
 async function fetchLyrics(title: string, artist: string, trackId: string) {
   isLoadingLyrics.value = true
   lyricsData.value = null
 
   try {
-    const data = await $fetch<{ success: boolean; format: 'ttml'|'lrc'; raw: string }>(
+    const data = await $fetch<{ success: boolean; format: 'ttml'|'lrc'; raw: string; tlyric?: string }>(
       `/api/lyrics?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}&trackId=${trackId}`
     )
     if (data.success && data.raw) {
-       lyricsData.value = { raw: data.raw, format: data.format }
+       lyricsData.value = { raw: data.raw, format: data.format, tlyric: data.tlyric }
     }
   } catch (e) {
     console.warn('歌词获取失败:', e)
@@ -191,6 +221,13 @@ onMounted(() => {
   if (!track.value) {
     router.push('/')
   }
+  // 添加键盘事件监听
+  window.addEventListener('keydown', handleKeyboardEvent)
+})
+
+onUnmounted(() => {
+  // 移除键盘事件监听
+  window.removeEventListener('keydown', handleKeyboardEvent)
 })
 </script>
 
@@ -198,5 +235,21 @@ onMounted(() => {
 .mask-lyrics {
   -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%);
   mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%);
+}
+
+/* 封面切换动画 */
+.cover-fade-enter-active,
+.cover-fade-leave-active {
+  transition: opacity 0.5s ease, transform 0.5s ease;
+}
+
+.cover-fade-enter-from {
+  opacity: 0;
+  transform: scale(0.95);
+}
+
+.cover-fade-leave-to {
+  opacity: 0;
+  transform: scale(1.05);
 }
 </style>
