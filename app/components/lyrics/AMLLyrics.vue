@@ -141,7 +141,8 @@
           <!-- 翻译歌词（在原句歌词下方） -->
           <template v-if="group.translation">
             <div 
-              class="translated-text-wrapper mt-1 translate-enter"
+              class="translated-text-wrapper mt-1"
+              :class="{ 'translate-enter': activeIndices.includes(index) }"
             >
               <div 
                 class="translated-text"
@@ -425,7 +426,17 @@ const groupedLyrics = computed(() => {
   
   for (let idx = 0; idx < groups.length; idx++) {
     const currentGroup = groups[idx]!
-    resultGroups.push(currentGroup)
+    
+    // 深拷贝当前组，避免修改原始数据
+    const copiedGroup: LyricGroup = {
+      original: { ...currentGroup.original },
+      translation: currentGroup.translation ? {
+        ...currentGroup.translation,
+        words: currentGroup.translation.words.map(w => ({ ...w }))
+      } : undefined
+    }
+    
+    resultGroups.push(copiedGroup)
     
     // 在每句歌词之后都插入空行（除了最后一句）
     if (idx < groups.length - 1) {
@@ -444,24 +455,29 @@ const groupedLyrics = computed(() => {
       if (gap < GAP_THRESHOLD) {
         // 找到刚添加的当前组，修改它的 endTime
         const lastAddedIdx = resultGroups.length - 1
+        const lastAddedGroup = resultGroups[lastAddedIdx]!
+        
+        // 深拷贝，确保翻译对象也被正确复制
         const extendedGroup: LyricGroup = {
           original: {
-            ...resultGroups[lastAddedIdx]!.original,
-            endTime: nextStart // 延长到下一句开始
+            ...lastAddedGroup.original,
+            endTime: nextStart
           }
         }
-        // 如果有翻译歌词，也需要延长翻译的 endTime
-        if (extendedGroup.translation) {
+        
+        // 如果有翻译歌词，需要同步延长翻译的 endTime
+        if (lastAddedGroup.translation) {
           extendedGroup.translation = {
-            ...extendedGroup.translation,
+            ...lastAddedGroup.translation,
             endTime: nextStart,
-            words: extendedGroup.translation.words.map((w, wordIdx) => 
-              wordIdx === extendedGroup.translation!.words.length - 1 
+            words: lastAddedGroup.translation.words.map((w, wordIdx) => 
+              wordIdx === lastAddedGroup.translation!.words.length - 1 
                 ? { ...w, endTime: nextStart }
                 : w
             )
           }
         }
+        
         // 如果是逐字歌词，也需要延长最后一个单词的 endTime
         if (extendedGroup.original.words.length > 0) {
           extendedGroup.original.words = extendedGroup.original.words.map((w, wordIdx) => 
@@ -1098,8 +1114,8 @@ onUnmounted(() => {
 .translated-text {
   font-family: 'HarmonyOS Sans SC', 'HarmonyOS Sans', 'PingFang SC', sans-serif !important;
   font-weight: 900 !important;
-  opacity: 0.6;
-  transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  opacity: 0;
+  transition: opacity 0.3s ease;
   white-space: normal;
   overflow: visible;
   text-overflow: clip;
@@ -1110,7 +1126,7 @@ onUnmounted(() => {
 }
 
 .translated-text-wrapper.translate-enter .translated-text {
-  opacity: 0.9;
+  opacity: 1;
   color: rgba(255, 255, 255, 0.9);
 }
 

@@ -224,13 +224,19 @@ export default defineEventHandler(async (event) => {
     if (existsSync(lrcPath)) {
       try {
         const lrc = await readFile(lrcPath, 'utf-8')
+        // 检查是否有对应的翻译歌词文件
+        let tlyric: string | undefined
+        const tlyricPath = join(getLyricsPath(), `${trackId}.tlyric`)
+        if (existsSync(tlyricPath)) {
+          tlyric = await readFile(tlyricPath, 'utf-8')
+        }
         // 后台尝试获取 TTML 升级（不阻塞当前请求）
         if (title) {
           upgradeToTtml(trackId, title, artist).catch(e => {
             console.warn('[lyrics] Background TTML upgrade failed:', e)
           })
         }
-        return { success: true, source: 'local', format: 'lrc', raw: lrc, trackId }
+        return { success: true, source: 'local', format: 'lrc', raw: lrc, tlyric, trackId }
       } catch (e) {
         console.warn('[lyrics] Failed to read local LRC:', e)
       }
