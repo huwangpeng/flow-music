@@ -223,7 +223,7 @@ const togglePlay = () => {
 const playPrevious = () => { audioStore.playPrevious() }
 const playNext = () => { audioStore.playNext() }
 const toggleShuffle = () => { audioStore.toggleShuffle() }
-const toggleRepeat = () => { audioStore.setRepeatMode(repeatMode.value) }
+const toggleRepeat = () => { audioStore.setRepeatMode() }
 
 const toggleMute = () => {
   audioStore.setMute(!audioStore.isMuted)

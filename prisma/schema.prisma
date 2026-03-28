@@ -31,4 +31,54 @@ model AudioTrack {
   tags         String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  playlistItems PlaylistTrack[]
+}
+
+model Playlist {
+  id          String          @id @default(cuid())
+  source      String
+  sourceId    String
+  name        String
+  description String?
+  coverUrl    String?
+  ownerName   String?
+  trackCount  Int             @default(0)
+  syncEnabled Boolean         @default(false)
+  lastSyncedAt DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  items       PlaylistTrack[]
+
+  @@unique([source, sourceId])
+}
+
+model PlaylistTrack {
+  id            String    @id @default(cuid())
+  playlistId    String
+  trackUuid     String?
+  sourceTrackId String
+  name          String
+  artist        String
+  album         String?
+  coverUrl      String?
+  duration      Int?
+  position      Int
+  addedAt       DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  playlist      Playlist  @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  track         AudioTrack? @relation(fields: [trackUuid], references: [uuid], onDelete: SetNull)
+
+  @@unique([playlistId, sourceTrackId])
+}
+
+model ScriptSecret {
+  id         String   @id @default(cuid())
+  scriptId    String
+  key        String
+  value      String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([scriptId, key])
 }

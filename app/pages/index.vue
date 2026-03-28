@@ -160,13 +160,13 @@
                 {{ isDragging ? '释放以上传' : '点击或拖拽文件到这里' }}
               </p>
               <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                支持 MP3, FLAC, WAV, M4A 等格式
+                支持 MP3、FLAC、WAV、M4A、NCM 等格式
               </p>
               <input
                 ref="fileInputRef"
                 type="file"
                 multiple
-                accept="audio/*"
+                accept="audio/*,.ncm"
                 class="hidden"
                 @change="handleFileSelect"
               />
@@ -192,6 +192,12 @@
                   <Music class="w-4 h-4 text-blue-500 flex-shrink-0" />
                   <span class="text-sm text-gray-700 dark:text-gray-300 truncate">{{ file.name }}</span>
                 </div>
+                <span
+                  v-if="file.name.toLowerCase().endsWith('.ncm')"
+                  class="ml-2 rounded-full bg-black px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-white dark:bg-white dark:text-black"
+                >
+                  NCM
+                </span>
                 <button
                   @click="removeFile(index)"
                   class="text-gray-400 hover:text-red-500 transition-colors"

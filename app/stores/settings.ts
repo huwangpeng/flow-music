@@ -1,6 +1,39 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
+export type ThemeMode = 'light' | 'dark' | 'system'
+
+const THEME_STORAGE_KEY = 'flow-music-theme'
+const SETTINGS_STORAGE_KEY = 'flow-music-settings'
+
+function loadThemeFromLocalStorage(): ThemeMode {
+  if (typeof window === 'undefined') return 'system'
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY)
+    if (saved) {
+      if (saved === 'light' || saved === 'dark' || saved === 'system') {
+        return saved
+      }
+    }
+  } catch (error) {
+    console.error('加载主题设置失败:', error)
+  }
+  return 'system'
+}
+
+function saveThemeToLocalStorage(theme: ThemeMode) {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, theme)
+  } catch (error) {
+    console.error('保存主题设置失败:', error)
+  }
+}
+
+interface PersistedSettings extends Partial<AppSettings> {
+  theme?: ThemeMode
+}
+
 export interface User {
   id: string
   email: string
@@ -10,7 +43,7 @@ export interface User {
 }
 
 export interface AppSettings {
-  theme: 'light' | 'dark' | 'system'
+  theme: ThemeMode
   language: string
   defaultQuality: string
   autoConvert: boolean
@@ -28,8 +61,8 @@ export interface AppSettings {
 export const useSettingsStore = defineStore('settings', () => {
   const user = ref<User | null>(null)
   const isAuthenticated = ref(false)
-  const settings = ref<AppSettings>({
-    theme: 'system',
+  const defaultSettings: AppSettings = {
+    theme: loadThemeFromLocalStorage(),
     language: 'zh-CN',
     defaultQuality: 'lossless',
     autoConvert: false,
@@ -41,7 +74,16 @@ export const useSettingsStore = defineStore('settings', () => {
       neteaseMusic: '',
       openai: ''
     }
-  })
+  }
+  const settings = ref<AppSettings>(defaultSettings)
+
+  function persistSettings(nextSettings: AppSettings) {
+    try {
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings))
+    } catch (error) {
+      console.error('保存设置失败:', error)
+    }
+  }
 
   async function clearCache() {
     if (typeof window === 'undefined') return
@@ -81,31 +123,46 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   function updateSettings(updates: Partial<AppSettings>) {
-    settings.value = { ...settings.value, ...updates }
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('settings', JSON.stringify(settings.value))
+    settings.value = {
+      ...settings.value,
+      ...updates,
+      apiKeys: {
+        ...settings.value.apiKeys,
+        ...updates.apiKeys,
+      },
     }
+    persistSettings(settings.value)
   }
 
   function loadSettings() {
-    if (typeof window === 'undefined') return
-    const saved = localStorage.getItem('settings')
+    const saved = localStorage.getItem(SETTINGS_STORAGE_KEY)
     if (saved) {
       try {
-        settings.value = { ...settings.value, ...JSON.parse(saved) }
+        const parsed = JSON.parse(saved)
+        settings.value = {
+          ...defaultSettings,
+          ...parsed,
+          apiKeys: {
+            ...defaultSettings.apiKeys,
+            ...parsed.apiKeys,
+          },
+        }
+        return
       } catch {
-        console.error('Failed to load settings')
+        // 解析失败，使用默认值
       }
     }
+    settings.value = defaultSettings
   }
 
-  function setTheme(theme: 'light' | 'dark' | 'system') {
+  function setTheme(theme: ThemeMode) {
     settings.value.theme = theme
     updateSettings({ theme })
     applyTheme(theme)
+    saveThemeToLocalStorage(theme)
   }
 
-  function applyTheme(theme: 'light' | 'dark' | 'system') {
+  function applyTheme(theme: ThemeMode) {
     if (typeof window === 'undefined') return
     const html = document.documentElement
     html.classList.remove('light', 'dark')

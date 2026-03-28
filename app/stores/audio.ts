@@ -2,23 +2,111 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { AudioTrack } from '~/types/audio'
 
+export type RepeatMode = 'off' | 'all' | 'one'
+export type PlayMode = 'list' | 'single' | 'shuffle' | 'sequence'
+
+export function getPlayModeFromStore(shuffleValue: boolean, repeatModeValue: RepeatMode): PlayMode {
+  if (shuffleValue && repeatModeValue === 'off') {
+    return 'shuffle'
+  }
+  if (!shuffleValue && repeatModeValue === 'one') {
+    return 'single'
+  }
+  if (!shuffleValue && repeatModeValue === 'off') {
+    return 'sequence'
+  }
+  return 'list'
+}
+
+export function setPlayModeToStore(
+  mode: PlayMode,
+  setShuffle: (value: boolean) => void,
+  setRepeatMode: (mode: RepeatMode) => void
+) {
+  switch (mode) {
+    case 'list':
+      setShuffle(false)
+      setRepeatMode('all')
+      break
+    case 'single':
+      setShuffle(false)
+      setRepeatMode('one')
+      break
+    case 'shuffle':
+      setShuffle(true)
+      setRepeatMode('off')
+      break
+    case 'sequence':
+      setShuffle(false)
+      setRepeatMode('off')
+      break
+  }
+}
+
+const STORAGE_KEY = 'flow-music-playback-settings'
+
+function loadPlaybackSettings() {
+  const defaultSettings = { shuffle: false, repeatMode: 'off' as 'off' | 'all' | 'one', volume: 0.8, isMuted: false }
+  if (typeof window === 'undefined') return defaultSettings
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      return {
+        shuffle: parsed.shuffle ?? false,
+        repeatMode: parsed.repeatMode ?? 'off',
+        volume: typeof parsed.volume === 'number' ? parsed.volume : 0.8,
+        isMuted: parsed.isMuted ?? false
+      }
+    }
+  } catch (error) {
+    console.error('加载播放设置失败:', error)
+  }
+  return defaultSettings
+}
+
+function savePlaybackSettings(shuffleValue: boolean, repeatModeValue: 'off' | 'all' | 'one', volumeValue?: number, isMutedValue?: boolean) {
+  if (typeof window === 'undefined') return
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    let currentSettings = { shuffle: false, repeatMode: 'off', volume: 0.8, isMuted: false }
+    if (saved) {
+      try {
+        currentSettings = JSON.parse(saved)
+      } catch {
+        // 解析失败，使用默认值
+      }
+    }
+    const newSettings = {
+      shuffle: shuffleValue,
+      repeatMode: repeatModeValue,
+      volume: volumeValue ?? currentSettings.volume ?? 0.8,
+      isMuted: isMutedValue ?? currentSettings.isMuted ?? false
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(newSettings))
+  } catch (error) {
+    console.error('保存播放设置失败:', error)
+  }
+}
+
 export const useAudioStore = defineStore('audio', () => {
+  const playbackSettings = loadPlaybackSettings()
   
-// 状态
-const currentTrack = ref<AudioTrack | null>(null)
-const isPlaying = ref(false)
-const volume = ref(0.8)
-const isMuted = ref(false)
-const currentTime = ref(0)
-const duration = ref(0)
-const shuffle = ref(false)
-const repeatMode = ref<'off' | 'all' | 'one'>('off')
-const queue = ref<AudioTrack[]>([])
-const queueIndex = ref(-1)
-const audioElement = ref<HTMLAudioElement | null>(null)
-const currentLyrics = ref<Array<{ time: number; text: string }> | null>(null)
-const bufferedPercent = ref(0)
-const isShuffled = ref(false) // 添加此状态来跟踪队列是否已打乱
+  // 状态
+  const currentTrack = ref<AudioTrack | null>(null)
+  const isPlaying = ref(false)
+  const volume = ref(playbackSettings.volume)
+  const isMuted = ref(playbackSettings.isMuted)
+  const currentTime = ref(0)
+  const duration = ref(0)
+  const shuffle = ref(playbackSettings.shuffle)
+  const repeatMode = ref<RepeatMode>(playbackSettings.repeatMode)
+  const queue = ref<AudioTrack[]>([])
+  const queueIndex = ref(-1)
+  const audioElement = ref<HTMLAudioElement | null>(null)
+  const currentLyrics = ref<Array<{ time: number; text: string }> | null>(null)
+  const bufferedPercent = ref(0)
+  const isShuffled = ref(false)
 
   // 计算属性
   const hasNext = computed(() => {
@@ -244,6 +332,7 @@ const isShuffled = ref(false) // 添加此状态来跟踪队列是否已打乱
     if (newVolume > 0) {
       isMuted.value = false
     }
+    savePlaybackSettings(shuffle.value, repeatMode.value, volume.value, isMuted.value)
   }
 
   function setMute(muted: boolean) {
@@ -251,6 +340,7 @@ const isShuffled = ref(false) // 添加此状态来跟踪队列是否已打乱
     if (audioElement.value) {
       audioElement.value.muted = muted
     }
+    savePlaybackSettings(shuffle.value, repeatMode.value, volume.value, muted)
   }
 
   function seek(time: number) {
@@ -260,10 +350,12 @@ const isShuffled = ref(false) // 添加此状态来跟踪队列是否已打乱
     }
   }
 
-  function setRepeatMode(mode: 'off' | 'all' | 'one') {
-    const modes: ('off' | 'all' | 'one')[] = ['off', 'all', 'one']
-    const currentIndex = modes.indexOf(repeatMode.value)
-    repeatMode.value = modes[(currentIndex + 1) % modes.length] as 'off' | 'all' | 'one'
+  function setRepeatMode(mode?: RepeatMode) {
+    const modes: RepeatMode[] = ['off', 'all', 'one']
+    const nextMode = mode ?? modes[(modes.indexOf(repeatMode.value) + 1) % modes.length] ?? 'off'
+
+    repeatMode.value = nextMode
+    savePlaybackSettings(shuffle.value, nextMode, volume.value, isMuted.value)
   }
 
    function shuffleQueue() {
@@ -296,6 +388,7 @@ const isShuffled = ref(false) // 添加此状态来跟踪队列是否已打乱
 
    function toggleShuffle() {
      shuffle.value = !shuffle.value
+     savePlaybackSettings(shuffle.value, repeatMode.value, volume.value, isMuted.value)
      if (shuffle.value) {
        shuffleQueue()
      } else {

@@ -1,26 +1,52 @@
-import { usePluginsStore } from '~/stores/plugins'
+import { useScriptsStore } from '~/stores/scripts'
+import { registerScriptActions, registerScriptFlowNodes, registerScriptPages } from '~/server/utils/script-registry'
 
 export default defineNuxtPlugin(async (nuxtApp) => {
   if (typeof window !== 'undefined') {
-    // Inject global API for remote plugins to use
-    // Plugins can use `FlowAPI.registry.registerTrigger(...)`
     ;(window as any).FlowAPI = {
-      registry: nuxtApp.$registry
+      registry: nuxtApp.$registry,
+      scripts: {
+        callAction: async (scriptId: string, action: string, payload?: Record<string, any>) => {
+          return await $fetch('/api/scripts/actions', {
+            method: 'POST',
+            body: {
+              scriptId,
+              action,
+              payload
+            }
+          })
+        }
+      }
     }
     
-    // Give state time to mount
     nuxtApp.hook('app:mounted', () => {
-      const store = usePluginsStore()
-      store.plugins.forEach(plugin => {
-        if (plugin.enabled) {
+      const store = useScriptsStore()
+      store.enabledScripts.forEach(script => {
+        if (script.enabled) {
           try {
-            console.log(`[Plugin Loader] Loading plugin: ${plugin.name} v${plugin.version}`)
-            // Dynamically execute plugin code.
-            const fn = new Function('FlowAPI', plugin.code)
-            fn((window as any).FlowAPI)
-            console.log(`[Plugin Loader] Successfully loaded ${plugin.name}`)
+            console.log(`[Script Loader] Loading script: ${script.name} v${script.version}`)
+            registerScriptActions(script.id, script.actions || [])
+            registerScriptFlowNodes(script.id, script.flowNodes || [])
+            registerScriptPages(script.id, script.pages || [])
+            const fn = new Function('FlowAPI', 'ScriptContext', script.code)
+            const scriptContext = {
+              settings: script.settings,
+              permissions: script.permissions,
+              configPage: script.configPage,
+              pages: script.pages,
+              actions: script.actions,
+              flowNodes: script.flowNodes,
+              meta: {
+                id: script.id,
+                name: script.name,
+                source: script.source,
+                sourceType: script.sourceType
+              }
+            }
+            fn((window as any).FlowAPI, scriptContext)
+            console.log(`[Script Loader] Successfully loaded ${script.name}`)
           } catch (e) {
-            console.error(`[PluginLoader] Failed to execute plugin: ${plugin.name}`, e)
+            console.error(`[ScriptLoader] Failed to execute script: ${script.name}`, e)
           }
         }
       })

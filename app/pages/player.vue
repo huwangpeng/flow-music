@@ -193,7 +193,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Music, ChevronDown, Play, Pause, SkipBack, SkipForward, Repeat, Repeat1, Shuffle, ListMusic, X } from 'lucide-vue-next'
 import AMLLyrics from '~/components/lyrics/AMLLyrics.vue'
-import { useAudioStore } from '~/stores/audio'
+import { useAudioStore, getPlayModeFromStore, setPlayModeToStore, type PlayMode } from '~/stores/audio'
 
 definePageMeta({
   layout: false // 全屏页面不使用默认 layout
@@ -242,9 +242,9 @@ const isLoadingLyrics = ref(false)
 const lyricsData = ref<{ raw: string; format: 'ttml' | 'lrc'; tlyric?: string } | null>(null)
 const showPlaylist = ref(false)
 
-// 播放模式：'list' | 'single' | 'shuffle' | 'sequence'
-type PlayMode = 'list' | 'single' | 'shuffle' | 'sequence'
-const playMode = ref<PlayMode>('list')
+const playMode = computed(() => {
+  return getPlayModeFromStore(audioStore.shuffle, audioStore.repeatMode)
+})
 
 const playModeIcon = computed(() => {
   switch (playMode.value) {
@@ -293,29 +293,12 @@ function handleSeek(time: number) {
 }
 
 function togglePlayMode() {
+  const currentMode = getPlayModeFromStore(audioStore.shuffle, audioStore.repeatMode)
   const modes: PlayMode[] = ['list', 'single', 'shuffle', 'sequence']
-  const currentIndex = modes.indexOf(playMode.value)
-  playMode.value = modes[(currentIndex + 1) % modes.length]
+  const currentIndex = modes.indexOf(currentMode)
+  const nextMode = modes[(currentIndex + 1) % modes.length]
   
-  // 同步到 audioStore
-  switch (playMode.value) {
-    case 'list':
-      audioStore.shuffle = false
-      audioStore.repeatMode = 'all'
-      break
-    case 'single':
-      audioStore.shuffle = false
-      audioStore.repeatMode = 'one'
-      break
-    case 'shuffle':
-      audioStore.shuffle = true
-      audioStore.repeatMode = 'off'
-      break
-    case 'sequence':
-      audioStore.shuffle = false
-      audioStore.repeatMode = 'off'
-      break
-  }
+  setPlayModeToStore(nextMode, (v) => { audioStore.shuffle = v }, (m) => { audioStore.setRepeatMode(m) })
 }
 
 function handleKeyboardEvent(e: KeyboardEvent) {

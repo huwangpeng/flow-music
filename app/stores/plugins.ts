@@ -23,6 +23,9 @@ export interface LocalPlugin extends RemotePlugin {
   code: string
   enabled: boolean
   settings: Record<string, any>
+  type: 'local' | 'url' | 'npm' | 'store'
+  source: string
+  permissions?: string[]
 }
 
 export const usePluginsStore = defineStore('plugins', () => {
@@ -113,7 +116,9 @@ export const usePluginsStore = defineStore('plugins', () => {
         ...remote,
         code: typeof code === 'string' ? code : `console.log("Mock code for ${remote.name}");`,
         enabled: true,
-        settings: defaultSettings
+        settings: defaultSettings,
+        type: 'store',
+        source: remote.url
       }
       
       plugins.value.push(newPlugin)
@@ -128,6 +133,23 @@ export const usePluginsStore = defineStore('plugins', () => {
   function removePlugin(id: string) {
     plugins.value = plugins.value.filter(p => p.id !== id)
     savePlugins()
+  }
+
+  function addPlugin(plugin: Omit<LocalPlugin, 'id' | 'settings' | 'code'> & {
+    id?: string
+    settings?: Record<string, any>
+    code?: string
+  }) {
+    const nextPlugin: LocalPlugin = {
+      ...plugin,
+      id: plugin.id || `plugin-${Date.now()}`,
+      settings: plugin.settings || {},
+      code: plugin.code || ''
+    }
+
+    plugins.value.push(nextPlugin)
+    savePlugins()
+    return nextPlugin.id
   }
 
   function togglePlugin(id: string) {
@@ -150,6 +172,7 @@ export const usePluginsStore = defineStore('plugins', () => {
     savePlugins,
     fetchStorePlugins,
     installPlugin,
+    addPlugin,
     removePlugin,
     togglePlugin
   }

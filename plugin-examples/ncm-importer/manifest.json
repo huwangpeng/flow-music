@@ -1,0 +1,60 @@
+{
+  "id": "script-ncm-importer",
+  "name": "NCM 导入插件",
+  "version": "1.0.0",
+  "description": "用于导入和展示网易云歌单的插件包示例。",
+  "author": "Flow Music",
+  "source": "local-package",
+  "sourceType": "package",
+  "permissions": [
+    "runtime:execute",
+    "ui:config",
+    "ui:page",
+    "network:fetch",
+    "library:read",
+    "library:write",
+    "downloads:manage",
+    "files:transcode"
+  ],
+  "package": {
+    "formatVersion": "1",
+    "packageType": "nuxt-script-plugin",
+    "entry": "server/index.mjs"
+  },
+  "configPage": {
+    "title": "NCM 插件配置",
+    "description": "填写网易云 Cookie，并由插件页面执行后续操作。",
+    "fields": [
+      {
+        "key": "cookie",
+        "label": "Cookie",
+        "type": "password",
+        "required": true,
+        "secret": true
+      }
+    ]
+  },
+  "pages": [
+    {
+      "id": "dashboard",
+      "title": "NCM 面板",
+      "path": "/scripts/pages/script-ncm-importer/dashboard",
+      "entry": "dashboard",
+      "entryHtml": "pages/dashboard/index.html",
+      "mountMode": "iframe"
+    }
+  ],
+  "actions": [
+    {
+      "id": "network.fetch",
+      "label": "请求远程接口",
+      "permission": "network:fetch"
+    },
+    {
+      "id": "logs.query",
+      "label": "读取脚本日志",
+      "permission": "runtime:execute"
+    }
+  ],
+  "flowNodes": []
+}

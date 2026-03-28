@@ -281,7 +281,7 @@ import { computed, ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { Music, Repeat, Repeat1, Shuffle, ListMusic, X } from 'lucide-vue-next'
 import { parseAmllLyrics } from '~/utils/amll-parser'
 import type { LyricLine, LyricWord } from '~/utils/amll-parser'
-import { useAudioStore } from '~/stores/audio'
+import { useAudioStore, getPlayModeFromStore, setPlayModeToStore, type PlayMode } from '~/stores/audio'
 
 interface Props {
   lyricsData: { raw: string; format: 'ttml' | 'lrc' } | null
@@ -300,9 +300,9 @@ const scrollOffset = ref(0)
 const internalTime = ref(0)
 const showPlaylist = ref(false)
 
-// 播放模式
-type PlayMode = 'list' | 'single' | 'shuffle' | 'sequence'
-const playMode = ref<PlayMode>('list')
+const playMode = computed(() => {
+  return getPlayModeFromStore(audioStore.shuffle, audioStore.repeatMode)
+})
 
 const playModeIcon = computed(() => {
   switch (playMode.value) {
@@ -325,30 +325,13 @@ const playModeLabel = computed(() => {
 })
 
 function togglePlayMode() {
+  const currentMode = getPlayModeFromStore(audioStore.shuffle, audioStore.repeatMode)
   const modes: PlayMode[] = ['list', 'single', 'shuffle', 'sequence']
-  const currentIndex = modes.indexOf(playMode.value)
-  // 如果当前值不在数组中，默认从第一个开始；否则计算下一个索引
+  const currentIndex = modes.indexOf(currentMode)
   const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % modes.length
-  playMode.value = modes[nextIndex]!
+  const nextMode = modes[nextIndex]!
   
-  switch (playMode.value) {
-    case 'list':
-      audioStore.shuffle = false
-      audioStore.repeatMode = 'all'
-      break
-    case 'single':
-      audioStore.shuffle = false
-      audioStore.repeatMode = 'one'
-      break
-    case 'shuffle':
-      audioStore.shuffle = true
-      audioStore.repeatMode = 'off'
-      break
-    case 'sequence':
-      audioStore.shuffle = false
-      audioStore.repeatMode = 'off'
-      break
-  }
+  setPlayModeToStore(nextMode, (v) => { audioStore.shuffle = v }, (m) => { audioStore.setRepeatMode(m) })
 }
 const isManualScrolling = ref(false)
 const scrollTimeHint = ref<string | null>(null)

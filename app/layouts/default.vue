@@ -113,9 +113,7 @@
 import { ref, computed } from 'vue'
 import {
   Home,
-  Music,
-  Zap,
-  Puzzle,
+  ListMusic,
   Settings,
   Menu,
   X,
@@ -132,8 +130,8 @@ const isOpen = ref(true)
 
 const navigation = [
   { name: '音乐库', href: '/', icon: Home },
-  { name: '自动化', href: '/automation', icon: Zap },
-  { name: '插件', href: '/plugins', icon: Puzzle },
+  { name: '歌单', href: '/playlists', icon: ListMusic },
+  { name: '插件', href: '/scripts', icon: ListMusic },
   { name: '设置', href: '/settings', icon: Settings },
 ]
 
@@ -182,9 +180,11 @@ function cycleTheme(event?: MouseEvent) {
   })
 }
 
+const themeMode = computed(() => settingsStore.settings.theme)
+
 const themeIcon = computed(() => {
-  if (settingsStore.settings.theme === 'light') return Sun
-  if (settingsStore.settings.theme === 'dark') return Moon
+  if (themeMode.value === 'light') return Sun
+  if (themeMode.value === 'dark') return Moon
   return Monitor
 })
 

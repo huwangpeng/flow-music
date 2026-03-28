@@ -8,6 +8,7 @@ import type { AudioTrack } from '~/types/audio'
 import { parseAudioMetadata } from '~/utils/parseTags'
 import { generateTrackId } from '~/utils/fileHash'
 import { saveLyricsLocally } from '~/server/utils/lyrics'
+import { ncmSearchWithMetadata } from '~/server/utils/ncm'
 
 export default defineEventHandler(async (event) => {
   try {
@@ -30,7 +31,7 @@ export default defineEventHandler(async (event) => {
     }
 
     const filename = fileData.filename || 'unknown'
-    const extension = filename.split('.').pop() || 'mp3'
+    const extension = (filename.split('.').pop() || 'mp3').toLowerCase()
     const fileSize = fileData.data.length
     const trackId = generateTrackId(filename, fileSize)
     const storageDir = getMusicPath()
@@ -87,6 +88,24 @@ export default defineEventHandler(async (event) => {
     let finalArtist = tags.artist || '未知艺术家'
     let finalAlbum = tags.album || '未知专辑'
     let coverUrl: string | null = null
+
+    if (extension === 'ncm') {
+      try {
+        const matched = await ncmSearchWithMetadata(finalTitle, finalArtist, tags.duration)
+        if (matched) {
+          finalTitle = matched.title || finalTitle
+          finalArtist = matched.artist || finalArtist
+          finalAlbum = matched.album || finalAlbum
+          coverUrl = matched.coverUrl || coverUrl
+
+          if (matched.lyrics) {
+            await saveLyricsLocally(trackId, matched.lyrics)
+          }
+        }
+      } catch (error: any) {
+        console.warn('[Upload] NCM metadata matching failed:', error.message || error)
+      }
+    }
 
     try {
       // 排除掉不合法的 title 
